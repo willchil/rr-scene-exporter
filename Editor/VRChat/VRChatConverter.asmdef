@@ -1,0 +1,24 @@
+{
+    "name": "willchil.RRSceneExporter.VRChat",
+    "rootNamespace": "RRSceneExporter.VRChat",
+    "references": [],
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "allowUnsafeCode": false,
+    "noEngineReferences": false,
+    "overrideReferences": false,
+    "defineConstraints": [
+        "HAS_VRCHAT_SDK"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "versionDefines": [
+        {
+            "name": "com.vrchat.base",
+            "expression": "3.0.0",
+            "define": "HAS_VRCHAT_SDK"
+        }
+    ]
+}

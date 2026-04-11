@@ -1,0 +1,24 @@
+{
+    "name": "willchil.RRSceneExporter.Editor",
+    "rootNamespace": "RRSceneExporter",
+    "references": [
+        "RecRoom.Studio.Common.Runtime",
+        "willchil.RRSceneExporter.Generated"
+    ],
+    "precompiledReferences": [
+        "Google.Protobuf.dll",
+        "RecRoom.Studio.Common.Base.Runtime.dll"
+    ],
+    "autoReferenced": true,
+    "allowUnsafeCode": false,
+    "noEngineReferences": false,
+    "overrideReferences": true,
+    "defineConstraints": [
+        "RECROOM_PROTOS_GENERATED"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "versionDefines": []
+}

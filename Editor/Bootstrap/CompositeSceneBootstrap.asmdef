@@ -1,0 +1,26 @@
+{
+    "name": "willchil.RRSceneExporter.Bootstrap",
+    "rootNamespace": "RRSceneExporter.Bootstrap",
+    "references": [],
+    "precompiledReferences": [
+        "Google.Protobuf.dll"
+    ],
+    "autoReferenced": true,
+    "allowUnsafeCode": false,
+    "noEngineReferences": false,
+    "overrideReferences": true,
+    "defineConstraints": [
+        "HAS_RECROOM_STUDIO"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "versionDefines": [
+        {
+            "name": "com.recroom.studio.common",
+            "expression": "",
+            "define": "HAS_RECROOM_STUDIO"
+        }
+    ]
+}

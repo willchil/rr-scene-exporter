@@ -1,0 +1,16 @@
+{
+  "name": "com.willchil.rr-scene-exporter",
+  "version": "1.0.0",
+  "displayName": "RR Scene Exporter",
+  "description": "Generates composite Unity scenes from Rec Room data exports, including protobuf deserialization, GLB-to-FBX conversion via Blender, and prefab placement.",
+  "unity": "2022.3",
+  "author": {
+    "name": "willchil"
+  },
+  "keywords": [
+    "recroom",
+    "scene",
+    "exporter",
+    "protobuf"
+  ]
+}
