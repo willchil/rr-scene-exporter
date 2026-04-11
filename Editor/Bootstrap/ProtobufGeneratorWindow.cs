@@ -8,6 +8,63 @@ using Debug = UnityEngine.Debug;
 
 namespace CompositeSceneGenerator.Bootstrap
 {
+    /// <summary>
+    /// Creates a stub asmdef for the Generated assembly on first load so that the
+    /// main Editor assembly's reference resolves before protos have been generated.
+    /// Without this, the dangling reference causes a compile error that also
+    /// prevents the Bootstrap menu items from appearing.
+    /// </summary>
+    [InitializeOnLoad]
+    static class GeneratedAssemblyStub
+    {
+        private const string StubDir = "Assets/RecRoomCache/Generated";
+        private const string AsmdefName = "willchil.RRSceneExporter.Generated.asmdef";
+
+        static GeneratedAssemblyStub()
+        {
+            string asmdefPath = Path.Combine(Path.GetFullPath(StubDir), AsmdefName);
+            if (!File.Exists(asmdefPath))
+                EditorApplication.delayCall += CreateStubAsmdef;
+        }
+
+        private static void CreateStubAsmdef()
+        {
+            EnsureAsmdef(Path.GetFullPath(StubDir));
+            AssetDatabase.Refresh();
+        }
+
+        /// <summary>
+        /// Ensures the Generated assembly definition file exists in the given directory.
+        /// Called both at editor startup (stub) and during proto generation.
+        /// </summary>
+        internal static void EnsureAsmdef(string fullDir)
+        {
+            string asmdefPath = Path.Combine(fullDir, AsmdefName);
+            if (File.Exists(asmdefPath))
+                return;
+
+            Directory.CreateDirectory(fullDir);
+            File.WriteAllText(asmdefPath, AsmdefContent);
+        }
+
+        internal const string AsmdefContent = @"{
+    ""name"": ""willchil.RRSceneExporter.Generated"",
+    ""rootNamespace"": """",
+    ""references"": [],
+    ""precompiledReferences"": [
+        ""Google.Protobuf.dll""
+    ],
+    ""autoReferenced"": true,
+    ""allowUnsafeCode"": false,
+    ""noEngineReferences"": true,
+    ""overrideReferences"": true,
+    ""defineConstraints"": [],
+    ""includePlatforms"": [],
+    ""excludePlatforms"": [],
+    ""versionDefines"": []
+}";
+    }
+
     public class ProtobufGeneratorWindow : EditorWindow
     {
         [SerializeField] private DefaultAsset descriptorSet;
@@ -283,27 +340,7 @@ namespace CompositeSceneGenerator.Bootstrap
 
         private static void WriteGeneratedAsmdef(string fullDir)
         {
-            string asmdefPath = Path.Combine(fullDir, "willchil.RRSceneExporter.Generated.asmdef");
-            if (File.Exists(asmdefPath))
-                return;
-
-            string content = @"{
-    ""name"": ""willchil.RRSceneExporter.Generated"",
-    ""rootNamespace"": """",
-    ""references"": [],
-    ""precompiledReferences"": [
-        ""Google.Protobuf.dll""
-    ],
-    ""autoReferenced"": true,
-    ""allowUnsafeCode"": false,
-    ""noEngineReferences"": true,
-    ""overrideReferences"": true,
-    ""defineConstraints"": [],
-    ""includePlatforms"": [],
-    ""excludePlatforms"": [],
-    ""versionDefines"": []
-}";
-            File.WriteAllText(asmdefPath, content);
+            GeneratedAssemblyStub.EnsureAsmdef(fullDir);
         }
     }
 }

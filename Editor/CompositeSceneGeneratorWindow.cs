@@ -288,6 +288,10 @@ namespace CompositeSceneGenerator
                             instance.transform.SetParent(makerPenRoot.transform, false);
                             instance.transform.localPosition = Vector3.zero;
                         }
+
+                        // Assign colliders to shape meshes based on physics mode from room data
+                        EditorUtility.DisplayProgressBar("Generating Composite Scene", "Assigning shape colliders...", 0.15f);
+                        ShapeColliderAssigner.AssignColliders(makerPenRoot, persistedRoom);
                     }
                 }
 
