@@ -2,6 +2,24 @@
 
 A Unity editor package that generates standalone, dependency-free Unity scenes from Rec Room data exports. It deserializes room protobuf data, converts maker pen GLB geometry to FBX via Blender, resolves and caches all prefab and material dependencies from Rec Room Studio packages, and places every object at its correct transform. The result is a self-contained `.unitypackage` that can be imported into any Unity project — including VRChat worlds — without needing Rec Room Studio installed.
 
+## Installation
+
+Install the package in your Unity project using one of these methods:
+
+### Option A: Git URL (requires [Git](https://git-scm.com/) installed)
+
+1. In Unity, open **Window > Package Manager**.
+2. Click the **+** button in the top-left and select **Add package from git URL...**
+3. Enter `https://github.com/willchil/rr-scene-exporter.git` and click **Add**.
+
+### Option B: Manual download (no Git required)
+
+1. Go to the [GitHub repository](https://github.com/willchil/rr-scene-exporter) and click **Code > Download ZIP**.
+2. Extract the ZIP to a permanent location on your computer.
+3. In Unity, open **Window > Package Manager**.
+4. Click the **+** button in the top-left and select **Add package from disk...**
+5. Navigate to the extracted folder and select the `package.json` file.
+
 ## Dependencies
 
 ### Rec Room Studio
@@ -33,9 +51,7 @@ After generating the protobuf classes, protoc is no longer needed.
 
 ### 1. Install the package
 
-1. In Unity, open **Window > Package Manager**.
-2. Click the **+** button in the top-left and select **Add package from git URL...**
-3. Enter `https://github.com/willchil/rr-scene-exporter.git` and click **Add**.
+Follow the [Installation](#installation) instructions above to add the package to your Rec Room Studio project.
 
 ### 2. Generate protobuf classes
 
@@ -82,9 +98,7 @@ The export automatically collects all scene dependencies (meshes, textures, mate
 
 ### 1. Install the package
 
-1. In Unity, open **Window > Package Manager**.
-2. Click the **+** button in the top-left and select **Add package from git URL...**
-3. Enter `https://github.com/willchil/rr-scene-exporter.git` and click **Add**.
+Follow the [Installation](#installation) instructions above to add the package to your VRChat project.
 
 The VRChat-specific tools compile automatically when the VRChat SDK (`com.vrchat.base`) is detected — no configuration needed.
 
