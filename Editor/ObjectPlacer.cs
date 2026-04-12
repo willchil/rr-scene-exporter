@@ -29,6 +29,9 @@ namespace CompositeSceneGenerator
                         ApplyTransform(instance.transform, view.Transform, view.SandboxDeformationData);
                         if (HiddenPrefabIds.Ids.Contains(prefabGuid))
                             DisableRenderers(instance);
+                        DisableCollidersIfDecoration(instance, view);
+                        AddRigidbodyIfPhysical(instance, view);
+                        PrefabPostProcessorRegistry.TryProcess(instance, prefabGuid, view);
                         placed++;
 
                         foreach (var child in view.ChildViews)
@@ -88,6 +91,9 @@ namespace CompositeSceneGenerator
 
                         if (HiddenPrefabIds.Ids.Contains(prefabGuid))
                             DisableRenderers(instance);
+                        DisableCollidersIfDecoration(instance, view);
+                        AddRigidbodyIfPhysical(instance, view);
+                        PrefabPostProcessorRegistry.TryProcess(instance, prefabGuid, view);
 
                         if (node.IsRoot)
                         {
@@ -177,6 +183,34 @@ namespace CompositeSceneGenerator
         {
             foreach (var r in go.GetComponentsInChildren<Renderer>(true))
                 r.enabled = false;
+        }
+
+        private const int PhysicsModeDecoration = 1;
+        private const int PhysicsModePhysical = 4;
+
+        internal static void DisableCollidersIfDecoration(GameObject go, PersistenceViewData view)
+        {
+            if (view?.ShapeContainerData == null)
+                return;
+            if (view.ShapeContainerData.PhysicsMode != PhysicsModeDecoration)
+                return;
+
+            foreach (var c in go.GetComponentsInChildren<Collider>(true))
+                c.enabled = false;
+        }
+
+        internal static void AddRigidbodyIfPhysical(GameObject go, PersistenceViewData view)
+        {
+            if (view?.ShapeContainerData == null)
+                return;
+            if (view.ShapeContainerData.PhysicsMode != PhysicsModePhysical)
+                return;
+            if (go.GetComponent<Rigidbody>() != null)
+                return;
+
+            var rb = go.AddComponent<Rigidbody>();
+            rb.useGravity = true;
+            rb.isKinematic = false;
         }
     }
 }

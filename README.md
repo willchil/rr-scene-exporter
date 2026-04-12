@@ -114,3 +114,14 @@ The imported scene contains:
 - A **RecRoomObjects** root object with all placed prefab instances in their original hierarchy
 
 From here you can add VRChat components (VRC Scene Descriptor, spawn points, etc.) and publish as a world.
+
+## Supported Features
+
+- Import maker pen GLB geometry with textures and colors
+- Import props (and hide ones that are only visible on the circuit layer)
+- Copy studio objects
+- Assign collision to shapes and objects
+- Add rigidbodies to physical objects
+- Convert Rec Room lights into Unity lights
+- Remap shaders to URP or the Built-in pipeline
+- Export the scene as a Unity package with no Rec Room Studio dependencies

@@ -122,6 +122,7 @@ namespace CompositeSceneGenerator
             new Guid("48953977-55f6-4635-a79d-1395eb861975"), // (Spawner Component V1 (Legacy))
             new Guid("029eacd4-004c-4a4f-9a1a-5ed68fe9e8bd"), // (Spawner Component)
             new Guid("1ec28e5f-4aa6-4ccc-ac25-a8c9805fd197"), // (Spotlight)
+            new Guid("ddeb1eeb-a19f-4a88-aa86-1180e2e479e6"), // (Spotlight V1 (Legacy))
             new Guid("fb96f73f-d7d3-4f10-99b6-fc3e31d319b3"), // (Start Game Chip)
             new Guid("c4e8ff48-7eeb-45f2-bd49-9f81dbe4a7bb"), // (State Machine)
             new Guid("23ce4158-fd12-432c-8fb6-a618b3d0671e"), // (State)

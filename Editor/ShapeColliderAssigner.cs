@@ -16,6 +16,7 @@ namespace CompositeSceneGenerator
         //   4 = Picker/interactive objects
         // Only mode 1 (decoration) should skip colliders.
         private const int PhysicsModeDecoration = 1;
+        private const int PhysicsModePhysical = 4;
 
         /// <summary>
         /// Builds a mapping from ShapeContainer GUID (no hyphens, lowercase) to physics_mode
@@ -92,6 +93,14 @@ namespace CompositeSceneGenerator
                 {
                     skippedDecoration += containerTransform.childCount;
                     continue;
+                }
+
+                // Attach a Rigidbody to physical shape containers
+                if (physicsMode == PhysicsModePhysical && containerTransform.GetComponent<Rigidbody>() == null)
+                {
+                    var rb = containerTransform.gameObject.AddComponent<Rigidbody>();
+                    rb.useGravity = true;
+                    rb.isKinematic = false;
                 }
 
                 for (int j = 0; j < containerTransform.childCount; j++)
