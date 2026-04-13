@@ -26,23 +26,51 @@ namespace CompositeSceneGenerator
 
         public IReadOnlyCollection<Guid> HandledPrefabIds => s_ids;
 
+        // Child transform name where the Unity Light component should be attached
+        // so it inherits the correct orientation from the prefab hierarchy.
+        static string GetLightChildName(Guid prefabGuid)
+        {
+            if (prefabGuid == PointLightId || prefabGuid == PointLightV1Id)
+                return "PointLight";
+            if (prefabGuid == SpotlightId || prefabGuid == SpotlightV1Id)
+                return "Spotlight";
+            if (prefabGuid == DomeLightId)
+                return "Point Light";
+            return null;
+        }
+
         public void Process(GameObject instance, Guid prefabGuid, PersistenceViewData view)
         {
             bool isSpot = prefabGuid == SpotlightId || prefabGuid == SpotlightV1Id || prefabGuid == DomeLightId;
             LightType lightType = isSpot ? LightType.Spot : LightType.Point;
 
-            var light = instance.GetComponentInChildren<Light>();
+            // Find the correct child transform to attach the light to
+            GameObject lightTarget = instance;
+            string childName = GetLightChildName(prefabGuid);
+            if (childName != null)
+            {
+                Transform root = instance.transform.Find("(Root)");
+                Transform child = root != null ? root.Find(childName) : null;
+                if (child != null)
+                    lightTarget = child.gameObject;
+                else
+                    Debug.LogWarning($"[LightPostProcessor] Could not find child (Root)/{childName} on {instance.name}; attaching light to root.", instance);
+            }
+
+            var light = lightTarget.GetComponentInChildren<Light>();
             if (light == null)
-                light = instance.AddComponent<Light>();
+                light = lightTarget.AddComponent<Light>();
 
             light.type = lightType;
 
             // Dynamic light data: intensity, range, emit, specular
+            bool isDomeLight = prefabGuid == DomeLightId;
             var dld = view.DynamicLightData;
             if (dld != null)
             {
                 light.enabled = dld.Emit;
-                light.range = dld.Range > 0 ? dld.Range / 10f : 1f;
+                // Dome Light range is already in Unity units; other lights need ÷10
+                light.range = dld.Range > 0 ? (isDomeLight ? dld.Range : dld.Range / 10f) : 1f;
                 light.intensity = dld.Intensity > 0 ? dld.Intensity / 10f : 0.1f;
             }
             else
@@ -56,7 +84,7 @@ namespace CompositeSceneGenerator
             if (isSpot)
             {
                 float angle = 60f; // default
-                if (prefabGuid == SpotlightId && view.SpotlightData != null)
+                if ((prefabGuid == SpotlightId || prefabGuid == SpotlightV1Id) && view.SpotlightData != null)
                     angle = view.SpotlightData.Angle;
                 else if (prefabGuid == DomeLightId && view.DomeLightData != null)
                     angle = view.DomeLightData.Angle;

@@ -47,16 +47,17 @@ namespace CompositeSceneGenerator
         /// Assigns colliders to shape meshes under the MakerPen hierarchy.
         /// Expects: MakerPen → (FBX root) → ShapeContainerRoot → ShapeContainer_{guid} → Shape_{type}_{guid}
         /// </summary>
+        private const string ContainerPrefix = "SHAPE_CONTAINER_";
+
         internal static void AssignColliders(GameObject makerPenRoot, PersistedRoomData roomData)
         {
             var physicsModeMap = BuildPhysicsModeMap(roomData);
 
-            // Find ShapeContainerRoot — it may be directly under makerPenRoot or one level deeper (FBX instance)
-            Transform containerRoot = FindShapeContainerRoot(makerPenRoot.transform);
+            // Find the parent of SHAPE_CONTAINER_ nodes in the hierarchy
+            Transform containerRoot = FindParentOfShapeContainers(makerPenRoot.transform, 0, 5);
             if (containerRoot == null)
             {
-                // Log the actual hierarchy to help diagnose
-                Debug.LogWarning("[ShapeColliders] Could not find ShapeContainerRoot under MakerPen hierarchy. " +
+                Debug.LogWarning("[ShapeColliders] Could not find SHAPE_CONTAINER_ nodes under MakerPen hierarchy. " +
                     $"Root has {makerPenRoot.transform.childCount} children.");
                 for (int c = 0; c < makerPenRoot.transform.childCount; c++)
                 {
@@ -74,14 +75,13 @@ namespace CompositeSceneGenerator
 
             for (int i = 0; i < containerRoot.childCount; i++)
             {
-                Transform containerTransform = containerRoot.GetChild(i);
-                string containerName = containerTransform.name;
+                Transform child = containerRoot.GetChild(i);
+                string childName = child.name;
 
-                // Expected format: ShapeContainer_{32-char hex guid}
-                if (!containerName.StartsWith("ShapeContainer_"))
+                if (!childName.StartsWith(ContainerPrefix, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                string guidStr = containerName.Substring("ShapeContainer_".Length);
+                string guidStr = childName.Substring(ContainerPrefix.Length);
                 containers++;
 
                 // Look up physics mode; default to environment (1) if not found
@@ -91,22 +91,21 @@ namespace CompositeSceneGenerator
 
                 if (physicsMode == PhysicsModeDecoration)
                 {
-                    skippedDecoration += containerTransform.childCount;
+                    skippedDecoration += child.childCount;
                     continue;
                 }
 
                 // Attach a Rigidbody to physical shape containers
-                if (physicsMode == PhysicsModePhysical && containerTransform.GetComponent<Rigidbody>() == null)
+                if (physicsMode == PhysicsModePhysical && child.GetComponent<Rigidbody>() == null)
                 {
-                    var rb = containerTransform.gameObject.AddComponent<Rigidbody>();
+                    var rb = child.gameObject.AddComponent<Rigidbody>();
                     rb.useGravity = true;
                     rb.isKinematic = false;
                 }
 
-                for (int j = 0; j < containerTransform.childCount; j++)
+                for (int j = 0; j < child.childCount; j++)
                 {
-                    Transform shapeTransform = containerTransform.GetChild(j);
-                    if (AddColliderToShape(shapeTransform))
+                    if (AddColliderToShape(child.GetChild(j)))
                         totalColliders++;
                 }
             }
@@ -115,23 +114,15 @@ namespace CompositeSceneGenerator
                       $"Added {totalColliders} colliders, skipped {skippedDecoration} decoration shapes.");
         }
 
-        private static Transform FindShapeContainerRoot(Transform root)
-        {
-            // The ShapeContainerRoot node from the GLB may be collapsed during
-            // FBX conversion or Unity import. Find the nearest ancestor whose
-            // children include "ShapeContainer_" entries.
-            return FindParentOfShapeContainers(root, 0, 5);
-        }
-
         private static Transform FindParentOfShapeContainers(Transform parent, int depth, int maxDepth)
         {
             if (depth >= maxDepth)
                 return null;
 
-            // Check if this node's children include ShapeContainer_ entries
+            // Check if this node's children include SHAPE_CONTAINER_ entries
             for (int i = 0; i < parent.childCount; i++)
             {
-                if (parent.GetChild(i).name.StartsWith("ShapeContainer_"))
+                if (parent.GetChild(i).name.StartsWith(ContainerPrefix, StringComparison.OrdinalIgnoreCase))
                     return parent;
             }
 
