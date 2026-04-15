@@ -305,6 +305,9 @@ namespace CompositeSceneGenerator
                 var usedGuids = DependencyCache.CollectUsedPrefabGuids(persistedRoom);
                 DependencyCache.CachePackageDependencies(prefabLookup, usedGuids);
 
+                // Add base components to cached prefab assets (e.g. Light on light prefabs)
+                PrefabPostProcessorRegistry.PreparePrefabs(prefabLookup);
+
                 // 6. Instantiate objects using the connectable graph for hierarchy
                 var objectRoot = new GameObject("RecRoomObjects");
                 int placed = 0;

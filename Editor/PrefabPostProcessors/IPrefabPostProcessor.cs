@@ -15,7 +15,15 @@ namespace CompositeSceneGenerator
         IReadOnlyCollection<Guid> HandledPrefabIds { get; }
 
         /// <summary>
+        /// Called once per prefab GUID on the cached prefab asset to add
+        /// shared base components (e.g. a Light component with default settings).
+        /// Modifications are saved to the prefab asset so all instances inherit them.
+        /// </summary>
+        void PreparePrefab(GameObject prefabRoot, Guid prefabGuid);
+
+        /// <summary>
         /// Called after a prefab instance is placed in the scene.
+        /// Apply per-instance overrides here (e.g. intensity, color, range).
         /// </summary>
         /// <param name="instance">The instantiated GameObject.</param>
         /// <param name="prefabGuid">The Rec Room prefab GUID.</param>

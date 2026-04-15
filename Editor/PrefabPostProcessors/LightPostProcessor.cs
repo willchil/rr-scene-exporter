@@ -39,12 +39,39 @@ namespace CompositeSceneGenerator
             return null;
         }
 
-        public void Process(GameObject instance, Guid prefabGuid, PersistenceViewData view)
+        public void PreparePrefab(GameObject prefabRoot, Guid prefabGuid)
         {
             bool isSpot = prefabGuid == SpotlightId || prefabGuid == SpotlightV1Id || prefabGuid == DomeLightId;
             LightType lightType = isSpot ? LightType.Spot : LightType.Point;
 
-            // Find the correct child transform to attach the light to
+            GameObject lightTarget = prefabRoot;
+            string childName = GetLightChildName(prefabGuid);
+            if (childName != null)
+            {
+                Transform root = prefabRoot.transform.Find("(Root)");
+                Transform child = root != null ? root.Find(childName) : null;
+                if (child != null)
+                    lightTarget = child.gameObject;
+            }
+
+            var light = lightTarget.GetComponentInChildren<Light>();
+            if (light == null)
+                light = lightTarget.AddComponent<Light>();
+
+            // Shared base configuration — inherited by every instance
+            light.type = lightType;
+            light.lightmapBakeType = LightmapBakeType.Mixed;
+            light.shadows = LightShadows.Soft;
+            light.enabled = true;
+            light.range = 1f;
+            light.intensity = 0.1f;
+            if (isSpot)
+                light.spotAngle = 60f;
+        }
+
+        public void Process(GameObject instance, Guid prefabGuid, PersistenceViewData view)
+        {
+            // Find the Light component added by PreparePrefab
             GameObject lightTarget = instance;
             string childName = GetLightChildName(prefabGuid);
             if (childName != null)
@@ -59,45 +86,33 @@ namespace CompositeSceneGenerator
 
             var light = lightTarget.GetComponentInChildren<Light>();
             if (light == null)
-                light = lightTarget.AddComponent<Light>();
+            {
+                Debug.LogWarning($"[LightPostProcessor] No Light component found on {instance.name}. Was PreparePrefab called?", instance);
+                return;
+            }
 
-            light.type = lightType;
-
-            // Dynamic light data: intensity, range, emit, specular
+            // Per-instance overrides from room data
             bool isDomeLight = prefabGuid == DomeLightId;
+            bool isSpot = prefabGuid == SpotlightId || prefabGuid == SpotlightV1Id || isDomeLight;
             var dld = view.DynamicLightData;
             if (dld != null)
             {
                 light.enabled = dld.Emit;
-                // Dome Light range is already in Unity units; other lights need ÷10
                 light.range = dld.Range > 0 ? (isDomeLight ? dld.Range : dld.Range / 10f) : 1f;
                 light.intensity = dld.Intensity > 0 ? dld.Intensity / 10f : 0.1f;
             }
-            else
-            {
-                light.enabled = true;
-                light.range = 1f;
-                light.intensity = 0.1f;
-            }
 
-            // Spot angle: from SpotlightData or DomeLightData
             if (isSpot)
             {
-                float angle = 60f; // default
+                float angle = 60f;
                 if ((prefabGuid == SpotlightId || prefabGuid == SpotlightV1Id) && view.SpotlightData != null)
                     angle = view.SpotlightData.Angle;
-                else if (prefabGuid == DomeLightId && view.DomeLightData != null)
+                else if (isDomeLight && view.DomeLightData != null)
                     angle = view.DomeLightData.Angle;
-
-                // Clamp to Unity's valid range
                 light.spotAngle = Mathf.Clamp(angle, 1f, 179f);
             }
 
-            // Color: 32-bit int where low byte is palette index, upper 3 bytes are RGB
             light.color = RecRoomColorUtility.DecodeColor(view.SandboxColorableData);
-
-            // Shadows disabled — too many additional lights overwhelm URP's shadow atlas
-            light.shadows = LightShadows.None;
         }
     }
 }

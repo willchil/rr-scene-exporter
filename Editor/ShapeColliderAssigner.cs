@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using UnityEditor;
 using UnityEngine;
 using RecRoom.Protobuf;
 using Debug = UnityEngine.Debug;
@@ -44,6 +45,31 @@ namespace CompositeSceneGenerator
         }
 
         /// <summary>
+        /// Builds a mapping from ShapeContainer GUID to whether the object is grabbable.
+        /// </summary>
+        internal static Dictionary<string, bool> BuildGrabbableMap(PersistedRoomData roomData)
+        {
+            var map = new Dictionary<string, bool>();
+            foreach (var view in roomData.PersistenceViews)
+            {
+                if (view.ShapeContainerData == null || view.ShapeContainerData.ShapeCollection == null)
+                    continue;
+
+                if (view.Id == null || view.Id.IsEmpty)
+                    continue;
+
+                Guid guid = PrefabResolver.ByteStringToGuid(view.Id);
+                if (guid == Guid.Empty)
+                    continue;
+
+                string key = guid.ToString("N");
+                bool grabbable = view.CreationObjectData != null && view.CreationObjectData.IsGrabbable;
+                map[key] = grabbable;
+            }
+            return map;
+        }
+
+        /// <summary>
         /// Assigns colliders to shape meshes under the MakerPen hierarchy.
         /// Expects: MakerPen → (FBX root) → ShapeContainerRoot → ShapeContainer_{guid} → Shape_{type}_{guid}
         /// </summary>
@@ -52,6 +78,7 @@ namespace CompositeSceneGenerator
         internal static void AssignColliders(GameObject makerPenRoot, PersistedRoomData roomData)
         {
             var physicsModeMap = BuildPhysicsModeMap(roomData);
+            var grabbableMap = BuildGrabbableMap(roomData);
 
             // Find the parent of SHAPE_CONTAINER_ nodes in the hierarchy
             Transform containerRoot = FindParentOfShapeContainers(makerPenRoot.transform, 0, 5);
@@ -72,6 +99,7 @@ namespace CompositeSceneGenerator
             int totalColliders = 0;
             int skippedDecoration = 0;
             int containers = 0;
+            int madeStatic = 0;
 
             for (int i = 0; i < containerRoot.childCount; i++)
             {
@@ -88,6 +116,17 @@ namespace CompositeSceneGenerator
                 int physicsMode = 1;
                 if (physicsModeMap.TryGetValue(guidStr, out int pm))
                     physicsMode = pm;
+
+                bool isGrabbable = false;
+                if (grabbableMap.TryGetValue(guidStr, out bool grab))
+                    isGrabbable = grab;
+
+                // Mark non-physical, non-grabbable containers and their children as static
+                if (physicsMode != PhysicsModePhysical && !isGrabbable)
+                {
+                    SetStaticRecursive(child.gameObject);
+                    madeStatic++;
+                }
 
                 if (physicsMode == PhysicsModeDecoration)
                 {
@@ -111,7 +150,20 @@ namespace CompositeSceneGenerator
             }
 
             Debug.Log($"[ShapeColliders] Processed {containers} shape containers. " +
-                      $"Added {totalColliders} colliders, skipped {skippedDecoration} decoration shapes.");
+                      $"Added {totalColliders} colliders, skipped {skippedDecoration} decoration shapes, " +
+                      $"marked {madeStatic} containers static.");
+        }
+
+        private static void SetStaticRecursive(GameObject go)
+        {
+            GameObjectUtility.SetStaticEditorFlags(go, StaticEditorFlags.BatchingStatic
+                | StaticEditorFlags.ContributeGI
+                | StaticEditorFlags.OccludeeStatic
+                | StaticEditorFlags.OccluderStatic
+                | StaticEditorFlags.NavigationStatic
+                | StaticEditorFlags.ReflectionProbeStatic);
+            foreach (Transform child in go.transform)
+                SetStaticRecursive(child.gameObject);
         }
 
         private static Transform FindParentOfShapeContainers(Transform parent, int depth, int maxDepth)
