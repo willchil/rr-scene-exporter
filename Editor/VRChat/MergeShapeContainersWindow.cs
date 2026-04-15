@@ -9,6 +9,7 @@ namespace RRSceneExporter.VRChat
     public class MergeShapeContainersWindow : EditorWindow
     {
         private GameObject _sourceObject;
+        private float _maxMeshSize = 0f;
 
         [MenuItem("Rec Room/Merge shape container shapes")]
         private static void ShowWindow()
@@ -20,16 +21,17 @@ namespace RRSceneExporter.VRChat
         {
             _sourceObject = (GameObject)EditorGUILayout.ObjectField(
                 "Source Object", _sourceObject, typeof(GameObject), true);
+            _maxMeshSize = EditorGUILayout.FloatField("Max Mesh Size", _maxMeshSize);
 
             EditorGUI.BeginDisabledGroup(_sourceObject == null);
             if (GUILayout.Button("Merge"))
-                Merge(_sourceObject);
+                Merge(_sourceObject, _maxMeshSize);
             EditorGUI.EndDisabledGroup();
         }
 
         private const string ContainerPrefix = "SHAPE_CONTAINER_";
 
-        private static void Merge(GameObject source)
+        private static void Merge(GameObject source, float maxMeshSize)
         {
             string sourceName = source.name;
             string meshFolderName = sourceName + "-Optimized";
@@ -98,15 +100,25 @@ namespace RRSceneExporter.VRChat
                     if (shapes.Count == 0)
                         continue;
 
-                    Mesh combinedMesh = CombineMeshesByMaterial(
-                        shapes, container, out Material[] materials);
+                    // Determine spatial partitions
+                    var cellMap = new Dictionary<Vector3Int, List<int>>();
+                    if (maxMeshSize > 0)
+                    {
+                        for (int s = 0; s < shapes.Count; s++)
+                        {
+                            Vector3 localPos = container.InverseTransformPoint(
+                                shapes[s].Transform.position);
+                            var cell = new Vector3Int(
+                                Mathf.FloorToInt(localPos.x / maxMeshSize),
+                                Mathf.FloorToInt(localPos.y / maxMeshSize),
+                                Mathf.FloorToInt(localPos.z / maxMeshSize));
+                            if (!cellMap.ContainsKey(cell))
+                                cellMap[cell] = new List<int>();
+                            cellMap[cell].Add(s);
+                        }
+                    }
 
-                    if (combinedMesh == null)
-                        continue;
-
-                    combinedMesh.name = container.name;
-                    string safeName = SanitizeFileName(container.name);
-                    AssetDatabase.CreateAsset(combinedMesh, meshFolder + "/" + safeName + ".asset");
+                    bool useSubmeshes = cellMap.Count > 1;
 
                     // Duplicate the container — preserves all components, static
                     // flags, layer, tag, Rigidbody, etc. on the container and
@@ -119,18 +131,86 @@ namespace RRSceneExporter.VRChat
                     // Use the first shape's renderer as a reference for settings
                     MeshRenderer refRenderer = shapes[0].MeshRenderer;
 
-                    // Strip MeshFilter/MeshRenderer from the cloned hierarchy,
-                    // then prune any GameObjects left with only a Transform.
+                    // Strip MeshFilter/MeshRenderer from the cloned hierarchy
                     StripRenderers(containerObj.transform);
-                    PruneEmptyChildren(containerObj.transform);
 
-                    // Add the combined mesh to the container
-                    containerObj.AddComponent<MeshFilter>().sharedMesh = combinedMesh;
-                    var newRenderer = containerObj.AddComponent<MeshRenderer>();
-                    newRenderer.sharedMaterials = materials;
+                    if (!useSubmeshes)
+                    {
+                        // Single combined mesh on the container (original behavior)
+                        Mesh combinedMesh = CombineMeshesByMaterial(
+                            shapes, container, out Material[] materials);
 
-                    // Copy renderer settings from the original
-                    CopyRendererSettings(refRenderer, newRenderer);
+                        if (combinedMesh == null)
+                        {
+                            DestroyImmediate(containerObj);
+                            continue;
+                        }
+
+                        combinedMesh.name = container.name;
+                        string safeName = SanitizeFileName(container.name);
+                        AssetDatabase.CreateAsset(combinedMesh,
+                            meshFolder + "/" + safeName + ".asset");
+
+                        PruneEmptyChildren(containerObj.transform);
+
+                        containerObj.AddComponent<MeshFilter>().sharedMesh = combinedMesh;
+                        var newRenderer = containerObj.AddComponent<MeshRenderer>();
+                        newRenderer.sharedMaterials = materials;
+                        CopyRendererSettings(refRenderer, newRenderer);
+                    }
+                    else
+                    {
+                        // Build name → cloned child map for reparenting
+                        var clonedChildMap = new Dictionary<string, Transform>();
+                        for (int j = 0; j < containerObj.transform.childCount; j++)
+                        {
+                            var child = containerObj.transform.GetChild(j);
+                            clonedChildMap[child.name] = child;
+                        }
+
+                        int submeshIdx = 0;
+                        foreach (var kvp in cellMap)
+                        {
+                            var cellShapes = new List<ShapeInfo>();
+                            var cellShapeNames = new HashSet<string>();
+                            foreach (int idx in kvp.Value)
+                            {
+                                cellShapes.Add(shapes[idx]);
+                                cellShapeNames.Add(shapes[idx].Transform.name);
+                            }
+
+                            Mesh cellMesh = CombineMeshesByMaterial(
+                                cellShapes, container, out Material[] cellMats);
+                            if (cellMesh == null) continue;
+
+                            string submeshName = $"Submesh_{submeshIdx}";
+                            cellMesh.name = $"{container.name}_{submeshName}";
+                            AssetDatabase.CreateAsset(cellMesh,
+                                meshFolder + "/" + SanitizeFileName(cellMesh.name) + ".asset");
+
+                            // Create submesh root under the container
+                            var submeshObj = new GameObject(submeshName);
+                            submeshObj.transform.SetParent(containerObj.transform, false);
+                            GameObjectUtility.SetStaticEditorFlags(submeshObj,
+                                GameObjectUtility.GetStaticEditorFlags(containerObj));
+
+                            // Reparent relevant cloned children under the submesh
+                            foreach (string shapeName in cellShapeNames)
+                            {
+                                if (clonedChildMap.TryGetValue(shapeName, out Transform clonedChild))
+                                    clonedChild.SetParent(submeshObj.transform, true);
+                            }
+
+                            submeshObj.AddComponent<MeshFilter>().sharedMesh = cellMesh;
+                            var newRenderer = submeshObj.AddComponent<MeshRenderer>();
+                            newRenderer.sharedMaterials = cellMats;
+                            CopyRendererSettings(refRenderer, newRenderer);
+
+                            submeshIdx++;
+                        }
+
+                        PruneEmptyChildren(containerObj.transform);
+                    }
 
                     mergedCount++;
                 }
