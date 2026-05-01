@@ -1,0 +1,17 @@
+{
+    "name": "willchil.RRSceneExporter.RRAvatar",
+    "rootNamespace": "RRSceneExporter.RRAvatar",
+    "references": [],
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "allowUnsafeCode": false,
+    "noEngineReferences": false,
+    "overrideReferences": false,
+    "defineConstraints": [],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "versionDefines": [],
+    "rootNamespaceDefaultVisibility": "Public"
+}
