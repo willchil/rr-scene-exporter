@@ -5,8 +5,9 @@ namespace CompositeSceneGenerator
 {
     /// <summary>
     /// Decodes Rec Room's SandboxColorableData color field.
-    /// The color is a 32-bit int: low byte (0-255) is a palette index,
-    /// the upper three bytes encode custom RGB when non-zero.
+    /// The color is a 32-bit int: values below 1000 denote a palette index,
+	/// and values greater or equal to 1000 denote an RGB colour encoded in
+	/// the lower 3 bytes, after that offset is subtracted from the value.
     /// </summary>
     internal static class RecRoomColorUtility
     {
@@ -89,14 +90,16 @@ namespace CompositeSceneGenerator
             if (colorData == null)
                 return Color.white;
 
+            // If the raw value is at least 1000, it's a custom RGB color
             int raw = colorData.Color;
-            int r = (raw >> 8)  & 0xFF;
-            int g = (raw >> 16) & 0xFF;
-            int b = (raw >> 24) & 0xFF;
-
-            // If any upper byte is non-zero, it's a custom RGB color
-            if (r != 0 || g != 0 || b != 0)
+            if (raw >= 1000)
+            {
+                raw -= 1000;
+                int r = (raw >> 16) & 0xFF;
+                int g = (raw >> 8)  & 0xFF;
+                int b = raw         & 0xFF;
                 return new Color(r / 255f, g / 255f, b / 255f);
+            }
 
             // Check the Rgbcolor protobuf field if present
             if (colorData.Rgbcolor != null &&
