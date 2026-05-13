@@ -7,10 +7,24 @@ using UnityEngine;
 
 namespace RRSceneExporter.RRAvatar
 {
+    public enum WatchHand
+    {
+        Left,
+        Right,
+        None,
+        Both,
+    }
+
     public class ConvertAvatarWindow : EditorWindow
     {
         [SerializeField] private string blenderPath;
         [SerializeField] private DefaultAsset glbAsset;
+        [SerializeField] private WatchHand watchHand = WatchHand.Left;
+        [SerializeField] private List<string> rigidMeshes = new List<string>();
+
+        private DefaultAsset lastScannedGlb;
+        private List<string> meshNames = new List<string>();
+        private Vector2 rigidScroll;
 
         [MenuItem("Rec Room/Convert Avatar")]
         public static void ShowWindow()
@@ -44,6 +58,44 @@ namespace RRSceneExporter.RRAvatar
             glbAsset = (DefaultAsset)EditorGUILayout.ObjectField(
                 new GUIContent("Avatar GLB (A-Pose)", "The .glb avatar file exported from Rec Room. Must be exported as an A-Pose."),
                 glbAsset, typeof(DefaultAsset), false);
+
+            if (glbAsset != lastScannedGlb)
+            {
+                RefreshMeshNames();
+            }
+
+            if (glbAsset != null && meshNames.Count > 0)
+            {
+                EditorGUILayout.Space();
+                watchHand = (WatchHand)EditorGUILayout.EnumPopup(
+                    new GUIContent("Watch Hand",
+                        "Which wrist the watch should appear on. The Wrist_Watch_* meshes on the " +
+                        "unselected side(s) are deleted from the avatar before rigging."),
+                    watchHand);
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField(
+                    new GUIContent("Rigid Meshes",
+                        "Meshes checked here are bound rigidly to a single nearest bone instead of " +
+                        "having body weights transferred onto them. Use for accessories that should " +
+                        "not deform with the skeleton (e.g. watches, glasses, props)."),
+                    EditorStyles.boldLabel);
+
+                rigidScroll = EditorGUILayout.BeginScrollView(rigidScroll, GUILayout.MaxHeight(150));
+                var deleteSet = new HashSet<string>(ComputeDeleteMeshes());
+                foreach (string name in meshNames)
+                {
+                    if (deleteSet.Contains(name))
+                        continue;
+                    bool was = rigidMeshes.Contains(name);
+                    bool now = EditorGUILayout.ToggleLeft(name, was);
+                    if (now && !was)
+                        rigidMeshes.Add(name);
+                    else if (!now && was)
+                        rigidMeshes.Remove(name);
+                }
+                EditorGUILayout.EndScrollView();
+            }
 
             EditorGUILayout.Space();
 
@@ -117,7 +169,10 @@ namespace RRSceneExporter.RRAvatar
                     "Convert Avatar",
                     "Running Blender (rig + export)...",
                     0.5f);
-                ok = AvatarConverter.ConvertGlbToRiggedFbx(blenderPath, glbFullPath, fbxFullPath);
+                ok = AvatarConverter.ConvertGlbToRiggedFbx(
+                    blenderPath, glbFullPath, fbxFullPath,
+                    rigidMeshes.Where(n => !ComputeDeleteMeshes().Contains(n)),
+                    ComputeDeleteMeshes());
             }
             finally
             {
@@ -178,6 +233,225 @@ namespace RRSceneExporter.RRAvatar
                 "OK");
         }
 
+        // ----- Rigid-mesh scan ---------------------------------------------------
+
+        /// <summary>
+        /// Compute the set of GLB mesh names that should be deleted from the avatar
+        /// before rigging, based on the current ``watchHand`` selection. Names are
+        /// matched against the scanned ``meshNames`` list (prefix match on
+        /// ``Wrist_Watch_L`` / ``Wrist_Watch_R``).
+        /// </summary>
+        private IEnumerable<string> ComputeDeleteMeshes()
+        {
+            bool deleteLeft  = watchHand == WatchHand.Right || watchHand == WatchHand.None;
+            bool deleteRight = watchHand == WatchHand.Left  || watchHand == WatchHand.None;
+
+            foreach (string name in meshNames)
+            {
+                if (deleteLeft && name.StartsWith("Wrist_Watch_L_", StringComparison.Ordinal))
+                    yield return name;
+                else if (deleteRight && name.StartsWith("Wrist_Watch_R_", StringComparison.Ordinal))
+                    yield return name;
+            }
+        }
+
+        /// <summary>
+        /// Scan the currently selected GLB and populate ``meshNames`` with the names
+        /// of every node that references a mesh. Also prunes ``rigidMeshes`` of any
+        /// entries that no longer exist in the new GLB.
+        /// </summary>
+        private void RefreshMeshNames()
+        {
+            lastScannedGlb = glbAsset;
+            meshNames.Clear();
+
+            if (glbAsset == null)
+            {
+                rigidMeshes.Clear();
+                return;
+            }
+
+            string assetPath = AssetDatabase.GetAssetPath(glbAsset);
+            string fullPath = string.IsNullOrEmpty(assetPath) ? null : Path.GetFullPath(assetPath);
+            if (string.IsNullOrEmpty(fullPath) || !File.Exists(fullPath))
+                return;
+
+            try
+            {
+                meshNames.AddRange(ReadGlbMeshNodeNames(fullPath));
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogWarning($"[ConvertAvatar] Failed to scan GLB '{fullPath}': {ex.Message}");
+            }
+
+            // Drop any previously selected names that are no longer present.
+            rigidMeshes.RemoveAll(n => !meshNames.Contains(n));
+
+            // Default any Wrist_Watch_* meshes to rigid (the watch is a solid
+            // accessory that should follow the wrist bone without deforming).
+            foreach (string name in meshNames)
+            {
+                if (name.StartsWith("Wrist_Watch_", StringComparison.Ordinal) &&
+                    !rigidMeshes.Contains(name))
+                {
+                    rigidMeshes.Add(name);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Parse a .glb file's JSON chunk and return the names of every node that
+        /// references a mesh (i.e. has a ``mesh`` property). These match the
+        /// Blender object names produced by ``bpy.ops.import_scene.gltf``.
+        /// </summary>
+        private static IEnumerable<string> ReadGlbMeshNodeNames(string glbPath)
+        {
+            byte[] bytes = File.ReadAllBytes(glbPath);
+            if (bytes.Length < 20 ||
+                bytes[0] != (byte)'g' || bytes[1] != (byte)'l' ||
+                bytes[2] != (byte)'T' || bytes[3] != (byte)'F')
+            {
+                throw new InvalidDataException("Not a binary glTF file.");
+            }
+
+            uint jsonLen = BitConverter.ToUInt32(bytes, 12);
+            string chunkType = System.Text.Encoding.ASCII.GetString(bytes, 16, 4);
+            // glTF spec spells the JSON chunk type "JSON" padded with a space to 4 bytes.
+            if (!chunkType.StartsWith("JSON"))
+                throw new InvalidDataException($"First GLB chunk is not JSON (got '{chunkType}').");
+            if (20 + jsonLen > bytes.Length)
+                throw new InvalidDataException("GLB JSON chunk extends past end of file.");
+
+            string json = System.Text.Encoding.UTF8.GetString(bytes, 20, (int)jsonLen);
+
+            // JsonUtility is unreliable on glTF (extensions/extras blocks, etc.),
+            // so do a minimal hand-rolled scan: locate the "nodes" array, then
+            // pull each top-level object that contains both a "name" and a
+            // "mesh" property.
+            var names = new List<string>();
+            int nodesStart = FindArrayStart(json, "nodes");
+            if (nodesStart < 0)
+                return names;
+
+            int i = nodesStart + 1; // skip '['
+            int depth = 1;
+            int objStart = -1;
+            int objDepth = 0;
+            bool inString = false;
+            bool escape = false;
+            while (i < json.Length && depth > 0)
+            {
+                char c = json[i];
+                if (inString)
+                {
+                    if (escape) escape = false;
+                    else if (c == '\\') escape = true;
+                    else if (c == '"') inString = false;
+                }
+                else if (c == '"') inString = true;
+                else if (c == '{')
+                {
+                    if (depth == 1)
+                    {
+                        objStart = i;
+                        objDepth = 1;
+                    }
+                    else objDepth++;
+                    depth++;
+                }
+                else if (c == '}')
+                {
+                    depth--;
+                    if (objStart >= 0)
+                    {
+                        objDepth--;
+                        if (objDepth == 0)
+                        {
+                            string body = json.Substring(objStart, i - objStart + 1);
+                            string name = ExtractStringProp(body, "name");
+                            if (!string.IsNullOrEmpty(name) && HasNumericProp(body, "mesh"))
+                                names.Add(name);
+                            objStart = -1;
+                        }
+                    }
+                }
+                else if (c == '[') depth++;
+                else if (c == ']') depth--;
+                i++;
+            }
+            return names;
+        }
+
+        private static int FindArrayStart(string json, string key)
+        {
+            // Find `"<key>"` followed by optional whitespace, ':', whitespace, then '['.
+            string token = "\"" + key + "\"";
+            int idx = 0;
+            while ((idx = json.IndexOf(token, idx, StringComparison.Ordinal)) >= 0)
+            {
+                int p = idx + token.Length;
+                while (p < json.Length && char.IsWhiteSpace(json[p])) p++;
+                if (p < json.Length && json[p] == ':')
+                {
+                    p++;
+                    while (p < json.Length && char.IsWhiteSpace(json[p])) p++;
+                    if (p < json.Length && json[p] == '[')
+                        return p;
+                }
+                idx = p;
+            }
+            return -1;
+        }
+
+        private static string ExtractStringProp(string body, string key)
+        {
+            string token = "\"" + key + "\"";
+            int idx = body.IndexOf(token, StringComparison.Ordinal);
+            if (idx < 0) return null;
+            int p = idx + token.Length;
+            while (p < body.Length && char.IsWhiteSpace(body[p])) p++;
+            if (p >= body.Length || body[p] != ':') return null;
+            p++;
+            while (p < body.Length && char.IsWhiteSpace(body[p])) p++;
+            if (p >= body.Length || body[p] != '"') return null;
+            p++;
+            var sb = new System.Text.StringBuilder();
+            while (p < body.Length)
+            {
+                char c = body[p];
+                if (c == '\\' && p + 1 < body.Length)
+                {
+                    char n = body[p + 1];
+                    if (n == '"' || n == '\\' || n == '/') sb.Append(n);
+                    else if (n == 'n') sb.Append('\n');
+                    else if (n == 't') sb.Append('\t');
+                    else if (n == 'r') sb.Append('\r');
+                    else sb.Append(n);
+                    p += 2;
+                    continue;
+                }
+                if (c == '"') return sb.ToString();
+                sb.Append(c);
+                p++;
+            }
+            return null;
+        }
+
+        private static bool HasNumericProp(string body, string key)
+        {
+            string token = "\"" + key + "\"";
+            int idx = body.IndexOf(token, StringComparison.Ordinal);
+            if (idx < 0) return false;
+            int p = idx + token.Length;
+            while (p < body.Length && char.IsWhiteSpace(body[p])) p++;
+            if (p >= body.Length || body[p] != ':') return false;
+            p++;
+            while (p < body.Length && char.IsWhiteSpace(body[p])) p++;
+            return p < body.Length && (char.IsDigit(body[p]) || body[p] == '-');
+        }
+
+
         // ----- Humanoid mapping --------------------------------------------------
 
         /// <summary>
@@ -215,37 +489,37 @@ namespace RRSceneExporter.RRAvatar
             ("RightFoot",     "Jnt.Foot.R"),
             ("RightToes",     "Jnt.Toe.R"),
 
-            ("LeftThumbProximal",     "Jnt.Hand.Thumb1.L"),
-            ("LeftThumbIntermediate", "Jnt.Hand.Thumb2.L"),
-            ("LeftThumbDistal",       "Jnt.Hand.Thumb3.L"),
-            ("LeftIndexProximal",     "Jnt.Hand.Index1.L"),
-            ("LeftIndexIntermediate", "Jnt.Hand.Index2.L"),
-            ("LeftIndexDistal",       "Jnt.Hand.Index3.L"),
-            ("LeftMiddleProximal",     "Jnt.Hand.Middle1.L"),
-            ("LeftMiddleIntermediate", "Jnt.Hand.Middle2.L"),
-            ("LeftMiddleDistal",       "Jnt.Hand.Middle3.L"),
-            ("LeftRingProximal",     "Jnt.Hand.Ring1.L"),
-            ("LeftRingIntermediate", "Jnt.Hand.Ring2.L"),
-            ("LeftRingDistal",       "Jnt.Hand.Ring3.L"),
-            ("LeftLittleProximal",     "Jnt.Hand.Pinky1.L"),
-            ("LeftLittleIntermediate", "Jnt.Hand.Pinky2.L"),
-            ("LeftLittleDistal",       "Jnt.Hand.Pinky3.L"),
+            ("Left Thumb Proximal",     "Jnt.Hand.Thumb1.L"),
+            ("Left Thumb Intermediate", "Jnt.Hand.Thumb2.L"),
+            ("Left Thumb Distal",       "Jnt.Hand.Thumb3.L"),
+            ("Left Index Proximal",     "Jnt.Hand.Index1.L"),
+            ("Left Index Intermediate", "Jnt.Hand.Index2.L"),
+            ("Left Index Distal",       "Jnt.Hand.Index3.L"),
+            ("Left Middle Proximal",     "Jnt.Hand.Middle1.L"),
+            ("Left Middle Intermediate", "Jnt.Hand.Middle2.L"),
+            ("Left Middle Distal",       "Jnt.Hand.Middle3.L"),
+            ("Left Ring Proximal",     "Jnt.Hand.Ring1.L"),
+            ("Left Ring Intermediate", "Jnt.Hand.Ring2.L"),
+            ("Left Ring Distal",       "Jnt.Hand.Ring3.L"),
+            ("Left Little Proximal",     "Jnt.Hand.Pinky1.L"),
+            ("Left Little Intermediate", "Jnt.Hand.Pinky2.L"),
+            ("Left Little Distal",       "Jnt.Hand.Pinky3.L"),
 
-            ("RightThumbProximal",     "Jnt.Hand.Thumb1.R"),
-            ("RightThumbIntermediate", "Jnt.Hand.Thumb2.R"),
-            ("RightThumbDistal",       "Jnt.Hand.Thumb3.R"),
-            ("RightIndexProximal",     "Jnt.Hand.Index1.R"),
-            ("RightIndexIntermediate", "Jnt.Hand.Index2.R"),
-            ("RightIndexDistal",       "Jnt.Hand.Index3.R"),
-            ("RightMiddleProximal",     "Jnt.Hand.Middle1.R"),
-            ("RightMiddleIntermediate", "Jnt.Hand.Middle2.R"),
-            ("RightMiddleDistal",       "Jnt.Hand.Middle3.R"),
-            ("RightRingProximal",     "Jnt.Hand.Ring1.R"),
-            ("RightRingIntermediate", "Jnt.Hand.Ring2.R"),
-            ("RightRingDistal",       "Jnt.Hand.Ring3.R"),
-            ("RightLittleProximal",     "Jnt.Hand.Pinky1.R"),
-            ("RightLittleIntermediate", "Jnt.Hand.Pinky2.R"),
-            ("RightLittleDistal",       "Jnt.Hand.Pinky3.R"),
+            ("Right Thumb Proximal",     "Jnt.Hand.Thumb1.R"),
+            ("Right Thumb Intermediate", "Jnt.Hand.Thumb2.R"),
+            ("Right Thumb Distal",       "Jnt.Hand.Thumb3.R"),
+            ("Right Index Proximal",     "Jnt.Hand.Index1.R"),
+            ("Right Index Intermediate", "Jnt.Hand.Index2.R"),
+            ("Right Index Distal",       "Jnt.Hand.Index3.R"),
+            ("Right Middle Proximal",     "Jnt.Hand.Middle1.R"),
+            ("Right Middle Intermediate", "Jnt.Hand.Middle2.R"),
+            ("Right Middle Distal",       "Jnt.Hand.Middle3.R"),
+            ("Right Ring Proximal",     "Jnt.Hand.Ring1.R"),
+            ("Right Ring Intermediate", "Jnt.Hand.Ring2.R"),
+            ("Right Ring Distal",       "Jnt.Hand.Ring3.R"),
+            ("Right Little Proximal",     "Jnt.Hand.Pinky1.R"),
+            ("Right Little Intermediate", "Jnt.Hand.Pinky2.R"),
+            ("Right Little Distal",       "Jnt.Hand.Pinky3.R"),
         };
 
         private static void ApplyHumanoidMapping(ModelImporter importer, string fbxAssetPath)

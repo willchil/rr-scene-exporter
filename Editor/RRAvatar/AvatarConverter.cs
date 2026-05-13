@@ -79,7 +79,18 @@ namespace RRSceneExporter.RRAvatar
         /// Run Blender headlessly to import <paramref name="glbPath"/> into fb_library.blend,
         /// transfer weights, and write the rigged result to <paramref name="fbxPath"/>.
         /// </summary>
-        public static bool ConvertGlbToRiggedFbx(string blenderPath, string glbPath, string fbxPath)
+        /// <param name="rigidMeshes">Names of meshes (as imported from the GLB) that should
+        /// be rigidly bound to the single closest deform bone, instead of having weights
+        /// transferred from the FB body donor. May be null or empty.</param>
+        /// <param name="deleteMeshes">Names of meshes that should be removed from the avatar
+        /// before rigging (e.g. the off-hand watch when only one wrist should carry it).
+        /// May be null or empty.</param>
+        public static bool ConvertGlbToRiggedFbx(
+            string blenderPath,
+            string glbPath,
+            string fbxPath,
+            System.Collections.Generic.IEnumerable<string> rigidMeshes = null,
+            System.Collections.Generic.IEnumerable<string> deleteMeshes = null)
         {
             string scriptPath = ResolvePackageFile("avatar_convert.py");
             string blendPath = ResolvePackageFile("fb_library.blend");
@@ -95,7 +106,38 @@ namespace RRSceneExporter.RRAvatar
                 return false;
             }
 
-            string args = $"\"{blendPath}\" --background --factory-startup --python \"{scriptPath}\" -- \"{glbPath}\" \"{fbxPath}\"";
+            var sb = new System.Text.StringBuilder();
+            sb.Append('"').Append(blendPath).Append('"');
+            sb.Append(" --background --factory-startup --python ");
+            sb.Append('"').Append(scriptPath).Append('"');
+            sb.Append(" -- ");
+            sb.Append('"').Append(glbPath).Append('"');
+            sb.Append(" \"").Append(fbxPath).Append('"');
+            if (rigidMeshes != null)
+            {
+                foreach (string name in rigidMeshes)
+                {
+                    if (string.IsNullOrEmpty(name))
+                        continue;
+                    sb.Append(" \"").Append(name).Append('"');
+                }
+            }
+            if (deleteMeshes != null)
+            {
+                bool wroteMarker = false;
+                foreach (string name in deleteMeshes)
+                {
+                    if (string.IsNullOrEmpty(name))
+                        continue;
+                    if (!wroteMarker)
+                    {
+                        sb.Append(" --delete");
+                        wroteMarker = true;
+                    }
+                    sb.Append(" \"").Append(name).Append('"');
+                }
+            }
+            string args = sb.ToString();
             Debug.Log($"[AvatarConverter] Running: \"{blenderPath}\" {args}");
 
             // Redirect Blender's user-resources lookup to an empty temp dir so

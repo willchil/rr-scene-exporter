@@ -20,18 +20,21 @@ Usage:
 
 import bpy
 import os
+import re
 import sys
 
-from mathutils import Matrix, Quaternion, Vector
+from mathutils import Matrix, Vector
 
 
-# Static corrective offset that aligns the GLB's AvatarRoot meshes with
-# fb_library.blend's Avatar_Skeleton rest pose. Determined empirically by
-# inspecting a known-good aligned scene; the GLB always imports AvatarRoot at
-# this same broken transform, so we bake the inverse into the children.
-AVATAR_ROOT_OFFSET_LOCATION = Vector((-0.031233, 0.04646, 0.010582))
-# Quaternion is (w, x, y, z) to match Blender's mathutils.Quaternion ctor.
-AVATAR_ROOT_OFFSET_ROTATION = Quaternion((0.018, 0.018, 0.004, 1.000))
+# Blender suffixes imported objects with ``.001``, ``.002``, ... when an object
+# with the same name already exists in the file (fb_library.blend pre-defines
+# Wrist_Watch_*_LOD0 as weight donors, so the GLB's identically-named meshes
+# get renamed). Strip that suffix when matching against caller-supplied names.
+_DUP_SUFFIX = re.compile(r"\.\d{3}$")
+
+
+def base_name(name):
+    return _DUP_SUFFIX.sub("", name)
 
 
 # ---------------------------------------------------------------------------
@@ -42,10 +45,22 @@ def parse_args():
     if "--" in sys.argv:
         args = sys.argv[sys.argv.index("--") + 1:]
         if len(args) >= 2:
-            return args[0], args[1]
+            # Trailing args are mesh names: bare names mark rigid binds; names
+            # after a ``--delete`` marker are removed from the avatar before
+            # rigging.
+            rigid = []
+            delete = []
+            bucket = rigid
+            for a in args[2:]:
+                if a == "--delete":
+                    bucket = delete
+                    continue
+                if a:
+                    bucket.append(a)
+            return args[0], args[1], rigid, delete
     raise RuntimeError(
         "Usage: blender fb_library.blend --background --python avatar_convert.py "
-        "-- input.glb output.fbx"
+        "-- input.glb output.fbx [rigid_mesh_name ...] [--delete mesh_name ...]"
     )
 
 
@@ -94,6 +109,38 @@ def transfer_weights(target, source):
     select_only(target)
     if target.vertex_groups:
         bpy.ops.object.vertex_group_normalize_all(lock_active=False)
+
+
+def rigid_bind(target, armature):
+    """Bind every vertex of ``target`` to the single deform bone whose head is
+    closest to the mesh's world-space bounding-box center. Keeps the mesh rigid
+    under armature deformation (no skinning distortion).
+    Returns the chosen bone name, or ``None`` if no deform bones were found.
+    """
+    # World-space mesh center from local bounding box.
+    bbox_center_local = sum((Vector(c) for c in target.bound_box), Vector()) / 8.0
+    center_world = target.matrix_world @ bbox_center_local
+
+    arm_mw = armature.matrix_world
+    best_name = None
+    best_dist = None
+    for bone in armature.data.bones:
+        if not bone.use_deform:
+            continue
+        head_world = arm_mw @ bone.head_local
+        d = (head_world - center_world).length
+        if best_dist is None or d < best_dist:
+            best_dist = d
+            best_name = bone.name
+
+    for vg in list(target.vertex_groups):
+        target.vertex_groups.remove(vg)
+    if best_name is None:
+        return None
+
+    vg = target.vertex_groups.new(name=best_name)
+    vg.add(list(range(len(target.data.vertices))), 1.0, 'REPLACE')
+    return best_name
 
 
 def fix_material_tints():
@@ -196,19 +243,8 @@ def import_glb(glb_path):
     if avatar_root is None:
         raise RuntimeError("AvatarRoot empty was not present after GLB import.")
 
-    # Apply the corrective offset to AvatarRoot, then bake the resulting
-    # world transform into each child and reset AvatarRoot to identity.
-    # We capture matrix_world (which already accounts for matrix_parent_inverse
-    # set by the glTF importer) rather than composing offset @ matrix_local
-    # directly, so the bake is correct regardless of the importer's
-    # parent-inverse state.
-    offset = (
-        Matrix.Translation(AVATAR_ROOT_OFFSET_LOCATION)
-        @ AVATAR_ROOT_OFFSET_ROTATION.normalized().to_matrix().to_4x4()
-    )
-    avatar_root.matrix_world = offset
-    bpy.context.view_layer.update()
-
+    # Bake AvatarRoot's world transform into each child, then reset AvatarRoot
+    # to identity so the children sit directly on the Avatar_Skeleton rest pose.
     children = list(avatar_root.children)
     baked_world = [c.matrix_world.copy() for c in children]
 
@@ -223,17 +259,25 @@ def import_glb(glb_path):
     return avatar_root
 
 
-def rig_meshes(avatar_root, armature):
+def rig_meshes(avatar_root, armature, rigid_names):
     targets = [c for c in avatar_root.children if c.type == 'MESH']
     print(f"Rigging {len(targets)} meshes under {avatar_root.name}")
+    rigid_set = set(rigid_names or ())
 
     for tgt in targets:
-        src = pick_weight_source(tgt.name)
-        if src is None:
-            print(f"  WARNING: no weight donor found for {tgt.name}; leaving unrigged")
+        if base_name(tgt.name) in rigid_set:
+            bone = rigid_bind(tgt, armature)
+            if bone is None:
+                print(f"  WARNING: no deform bone found for rigid mesh {tgt.name}")
+            else:
+                print(f"  {tgt.name}: rigid-bound to {bone}")
         else:
-            transfer_weights(tgt, src)
-            print(f"  {tgt.name}: weights from {src.name} ({len(tgt.vertex_groups)} groups)")
+            src = pick_weight_source(tgt.name)
+            if src is None:
+                print(f"  WARNING: no weight donor found for {tgt.name}; leaving unrigged")
+            else:
+                transfer_weights(tgt, src)
+                print(f"  {tgt.name}: weights from {src.name} ({len(tgt.vertex_groups)} groups)")
 
         for m in list(tgt.modifiers):
             if m.type == 'ARMATURE':
@@ -258,7 +302,7 @@ def export_fbx(output_fbx, avatar_root, targets, armature):
         use_selection=True,
         object_types={'ARMATURE', 'MESH', 'EMPTY'},
         apply_scale_options='FBX_SCALE_ALL',
-        axis_forward='-Z',
+        axis_forward='Z',
         axis_up='Y',
         use_space_transform=True,
         bake_space_transform=False,
@@ -280,16 +324,33 @@ def export_fbx(output_fbx, avatar_root, targets, armature):
 # ---------------------------------------------------------------------------
 
 def main():
-    glb_path, output_fbx = parse_args()
+    glb_path, output_fbx, rigid_names, delete_names = parse_args()
     print(f"GLB:    {glb_path}")
     print(f"Output: {output_fbx}")
+    if rigid_names:
+        print(f"Rigid:  {rigid_names}")
+    if delete_names:
+        print(f"Delete: {delete_names}")
 
     armature = bpy.data.objects.get("Avatar_Skeleton")
     if armature is None or armature.type != 'ARMATURE':
         raise RuntimeError("Avatar_Skeleton armature not found in fb_library.blend")
 
     avatar_root = import_glb(glb_path)
-    targets = rig_meshes(avatar_root, armature)
+
+    # Remove any meshes the caller asked to delete (e.g. an off-hand watch)
+    # before rigging so they don't get weight-transferred or exported.
+    if delete_names:
+        delete_set = set(delete_names)
+        for child in list(avatar_root.children):
+            if base_name(child.name) in delete_set and child.type == 'MESH':
+                print(f"Deleting mesh: {child.name}")
+                mesh_data = child.data
+                bpy.data.objects.remove(child, do_unlink=True)
+                if mesh_data is not None and mesh_data.users == 0:
+                    bpy.data.meshes.remove(mesh_data)
+
+    targets = rig_meshes(avatar_root, armature, rigid_names)
     fix_material_tints()
     unpack_textures(output_fbx)
     export_fbx(output_fbx, avatar_root, targets, armature)
