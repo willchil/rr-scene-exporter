@@ -24,6 +24,7 @@ namespace RRSceneExporter.RRAvatar
 
         private DefaultAsset lastScannedGlb;
         private List<string> meshNames = new List<string>();
+        private HashSet<string> skinMeshNames = new HashSet<string>();
         private Vector2 rigidScroll;
 
         [MenuItem("Rec Room Exporter/Convert Avatar")]
@@ -92,12 +93,17 @@ namespace RRSceneExporter.RRAvatar
 
             if (glbAsset != null && meshNames.Count > 0)
             {
-                EditorGUILayout.Space();
-                watchHand = (WatchHand)EditorGUILayout.EnumPopup(
-                    new GUIContent("Watch Hand",
-                        "Which wrist the watch should appear on. The Wrist_Watch_* meshes on the " +
-                        "unselected side(s) are deleted from the avatar before rigging."),
-                    watchHand);
+                bool hasWatch = meshNames.Any(
+                    n => n.StartsWith("Wrist_Watch_", StringComparison.Ordinal));
+                if (hasWatch)
+                {
+                    EditorGUILayout.Space();
+                    watchHand = (WatchHand)EditorGUILayout.EnumPopup(
+                        new GUIContent("Watch Hand",
+                            "Which wrist the watch should appear on. The Wrist_Watch_* meshes on the " +
+                            "unselected side(s) are deleted from the avatar before rigging."),
+                        watchHand);
+                }
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField(
@@ -112,6 +118,10 @@ namespace RRSceneExporter.RRAvatar
                 foreach (string name in meshNames)
                 {
                     if (deleteSet.Contains(name))
+                        continue;
+                    // Skin meshes drive the body's deformation; binding one rigidly
+                    // breaks the entire animation, so they're not eligible.
+                    if (skinMeshNames.Contains(name))
                         continue;
                     bool was = rigidMeshes.Contains(name);
                     bool now = EditorGUILayout.ToggleLeft(name, was);
@@ -290,6 +300,7 @@ namespace RRSceneExporter.RRAvatar
         {
             lastScannedGlb = glbAsset;
             meshNames.Clear();
+            skinMeshNames.Clear();
 
             if (glbAsset == null)
             {
@@ -304,15 +315,21 @@ namespace RRSceneExporter.RRAvatar
 
             try
             {
-                meshNames.AddRange(ReadGlbMeshNodeNames(fullPath));
+                foreach (var (name, isSkin) in ReadGlbMeshNodes(fullPath))
+                {
+                    meshNames.Add(name);
+                    if (isSkin)
+                        skinMeshNames.Add(name);
+                }
             }
             catch (Exception ex)
             {
                 UnityEngine.Debug.LogWarning($"[ConvertAvatar] Failed to scan GLB '{fullPath}': {ex.Message}");
             }
 
-            // Drop any previously selected names that are no longer present.
-            rigidMeshes.RemoveAll(n => !meshNames.Contains(n));
+            // Drop any previously selected names that are no longer present, or
+            // that are skin meshes (which are no longer rigid-eligible).
+            rigidMeshes.RemoveAll(n => !meshNames.Contains(n) || skinMeshNames.Contains(n));
 
             // Default any Wrist_Watch_* meshes to rigid (the watch is a solid
             // accessory that should follow the wrist bone without deforming).
@@ -327,11 +344,13 @@ namespace RRSceneExporter.RRAvatar
         }
 
         /// <summary>
-        /// Parse a .glb file's JSON chunk and return the names of every node that
-        /// references a mesh (i.e. has a ``mesh`` property). These match the
-        /// Blender object names produced by ``bpy.ops.import_scene.gltf``.
+        /// Parse a .glb file's JSON chunk and return every node that references
+        /// a mesh, along with whether that mesh uses a "skin" material (one whose
+        /// name starts with ``Skin_Mat`` or ``Skin_Gradients_Mat``). The returned
+        /// node names match the Blender object names produced by
+        /// ``bpy.ops.import_scene.gltf``.
         /// </summary>
-        private static IEnumerable<string> ReadGlbMeshNodeNames(string glbPath)
+        private static IEnumerable<(string Name, bool IsSkin)> ReadGlbMeshNodes(string glbPath)
         {
             byte[] bytes = File.ReadAllBytes(glbPath);
             if (bytes.Length < 20 ||
@@ -351,16 +370,64 @@ namespace RRSceneExporter.RRAvatar
 
             string json = System.Text.Encoding.UTF8.GetString(bytes, 20, (int)jsonLen);
 
-            // JsonUtility is unreliable on glTF (extensions/extras blocks, etc.),
-            // so do a minimal hand-rolled scan: locate the "nodes" array, then
-            // pull each top-level object that contains both a "name" and a
-            // "mesh" property.
-            var names = new List<string>();
-            int nodesStart = FindArrayStart(json, "nodes");
-            if (nodesStart < 0)
-                return names;
+            // Walk three top-level arrays: materials (index -> name), meshes
+            // (index -> set of material indices used by its primitives), and
+            // nodes (yielding name + mesh index). Combine to flag skin meshes.
+            var materialNames = ScanArrayObjects(json, "materials")
+                .Select(body => ExtractStringProp(body, "name") ?? "")
+                .ToList();
 
-            int i = nodesStart + 1; // skip '['
+            var meshMaterialIndices = ScanArrayObjects(json, "meshes")
+                .Select(CollectPrimitiveMaterialIndices)
+                .ToList();
+
+            var results = new List<(string, bool)>();
+            int nodeIdx = -1;
+            foreach (string body in ScanArrayObjects(json, "nodes"))
+            {
+                nodeIdx++;
+                string name = ExtractStringProp(body, "name");
+                if (string.IsNullOrEmpty(name))
+                    continue;
+                if (!HasNumericProp(body, "mesh"))
+                    continue;
+                int meshIndex = ExtractIntProp(body, "mesh");
+                bool isSkin = false;
+                if (meshIndex >= 0 && meshIndex < meshMaterialIndices.Count)
+                {
+                    foreach (int matIdx in meshMaterialIndices[meshIndex])
+                    {
+                        if (matIdx < 0 || matIdx >= materialNames.Count)
+                            continue;
+                        if (IsSkinMaterialName(materialNames[matIdx]))
+                        {
+                            isSkin = true;
+                            break;
+                        }
+                    }
+                }
+                results.Add((name, isSkin));
+            }
+            return results;
+        }
+
+        private static bool IsSkinMaterialName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            return name.StartsWith("Skin_Mat", StringComparison.Ordinal) ||
+                   name.StartsWith("Skin_Gradients_Mat", StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Yield the JSON text of each top-level object inside the array named
+        /// ``key`` at the document root. Returns nothing if the array is absent.
+        /// </summary>
+        private static IEnumerable<string> ScanArrayObjects(string json, string key)
+        {
+            int start = FindArrayStart(json, key);
+            if (start < 0) yield break;
+
+            int i = start + 1; // skip '['
             int depth = 1;
             int objStart = -1;
             int objDepth = 0;
@@ -394,10 +461,7 @@ namespace RRSceneExporter.RRAvatar
                         objDepth--;
                         if (objDepth == 0)
                         {
-                            string body = json.Substring(objStart, i - objStart + 1);
-                            string name = ExtractStringProp(body, "name");
-                            if (!string.IsNullOrEmpty(name) && HasNumericProp(body, "mesh"))
-                                names.Add(name);
+                            yield return json.Substring(objStart, i - objStart + 1);
                             objStart = -1;
                         }
                     }
@@ -406,7 +470,97 @@ namespace RRSceneExporter.RRAvatar
                 else if (c == ']') depth--;
                 i++;
             }
-            return names;
+        }
+
+        /// <summary>
+        /// Extract every ``"material": &lt;int&gt;`` reference from the
+        /// ``primitives`` array inside a mesh object body.
+        /// </summary>
+        private static List<int> CollectPrimitiveMaterialIndices(string meshBody)
+        {
+            var list = new List<int>();
+            // Locate the primitives array within this mesh object.
+            int primStart = FindArrayStart(meshBody, "primitives");
+            if (primStart < 0) return list;
+
+            string primSection = meshBody.Substring(primStart);
+            foreach (string primBody in ScanArrayObjectsFromArrayStart(primSection))
+            {
+                if (HasNumericProp(primBody, "material"))
+                    list.Add(ExtractIntProp(primBody, "material"));
+            }
+            return list;
+        }
+
+        private static IEnumerable<string> ScanArrayObjectsFromArrayStart(string arraySection)
+        {
+            // arraySection starts with '['. Reuse the same scanner pattern.
+            int i = 1;
+            int depth = 1;
+            int objStart = -1;
+            int objDepth = 0;
+            bool inString = false;
+            bool escape = false;
+            while (i < arraySection.Length && depth > 0)
+            {
+                char c = arraySection[i];
+                if (inString)
+                {
+                    if (escape) escape = false;
+                    else if (c == '\\') escape = true;
+                    else if (c == '"') inString = false;
+                }
+                else if (c == '"') inString = true;
+                else if (c == '{')
+                {
+                    if (depth == 1)
+                    {
+                        objStart = i;
+                        objDepth = 1;
+                    }
+                    else objDepth++;
+                    depth++;
+                }
+                else if (c == '}')
+                {
+                    depth--;
+                    if (objStart >= 0)
+                    {
+                        objDepth--;
+                        if (objDepth == 0)
+                        {
+                            yield return arraySection.Substring(objStart, i - objStart + 1);
+                            objStart = -1;
+                        }
+                    }
+                }
+                else if (c == '[') depth++;
+                else if (c == ']') depth--;
+                i++;
+            }
+        }
+
+        private static int ExtractIntProp(string body, string key)
+        {
+            string token = "\"" + key + "\"";
+            int idx = body.IndexOf(token, StringComparison.Ordinal);
+            if (idx < 0) return -1;
+            int p = idx + token.Length;
+            while (p < body.Length && char.IsWhiteSpace(body[p])) p++;
+            if (p >= body.Length || body[p] != ':') return -1;
+            p++;
+            while (p < body.Length && char.IsWhiteSpace(body[p])) p++;
+            int sign = 1;
+            if (p < body.Length && body[p] == '-') { sign = -1; p++; }
+            int value = 0;
+            bool any = false;
+            while (p < body.Length && char.IsDigit(body[p]))
+            {
+                value = value * 10 + (body[p] - '0');
+                p++;
+                any = true;
+            }
+            return any ? sign * value : -1;
         }
 
         private static int FindArrayStart(string json, string key)

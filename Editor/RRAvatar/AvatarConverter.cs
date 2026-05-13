@@ -9,7 +9,7 @@ namespace RRSceneExporter.RRAvatar
 {
     /// <summary>
     /// Drives the bundled Blender script that turns a Rec Room avatar GLB into a
-    /// rigged FBX bound to fb_library.blend's Avatar_Skeleton.
+    /// rigged FBX bound to rigged_reference.blend's Avatar_Skeleton.
     /// </summary>
     public static class AvatarConverter
     {
@@ -76,7 +76,7 @@ namespace RRSceneExporter.RRAvatar
         }
 
         /// <summary>
-        /// Run Blender headlessly to import <paramref name="glbPath"/> into fb_library.blend,
+        /// Run Blender headlessly to import <paramref name="glbPath"/> into rigged_reference.blend,
         /// transfer weights, and write the rigged result to <paramref name="fbxPath"/>.
         /// </summary>
         /// <param name="rigidMeshes">Names of meshes (as imported from the GLB) that should
@@ -93,7 +93,7 @@ namespace RRSceneExporter.RRAvatar
             System.Collections.Generic.IEnumerable<string> deleteMeshes = null)
         {
             string scriptPath = ResolvePackageFile("avatar_convert.py");
-            string blendPath = ResolvePackageFile("fb_library.blend");
+            string blendPath = ResolvePackageFile("rigged_reference.blend");
 
             if (scriptPath == null)
             {
@@ -102,7 +102,7 @@ namespace RRSceneExporter.RRAvatar
             }
             if (blendPath == null)
             {
-                Debug.LogError("[AvatarConverter] fb_library.blend not found in package.");
+                Debug.LogError("[AvatarConverter] rigged_reference.blend not found in package.");
                 return false;
             }
 

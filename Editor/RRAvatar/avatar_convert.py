@@ -1,7 +1,7 @@
 """
 Blender headless script: Convert a Rec Room avatar GLB into a rigged FBX.
 
-Workflow (the .blend opened by Blender must be the bundled fb_library.blend,
+Workflow (the .blend opened by Blender must be the bundled rigged_reference.blend,
 which contains Avatar_Skeleton, BodyMesh_LOD0 and the Wrist_Watch_*_LOD0
 source meshes used as weight donors):
 
@@ -15,7 +15,7 @@ source meshes used as weight donors):
        Unity-friendly settings.
 
 Usage:
-    blender fb_library.blend --background --python avatar_convert.py -- input.glb output.fbx
+    blender rigged_reference.blend --background --python avatar_convert.py -- input.glb output.fbx
 """
 
 import bpy
@@ -27,7 +27,7 @@ from mathutils import Matrix, Vector
 
 
 # Blender suffixes imported objects with ``.001``, ``.002``, ... when an object
-# with the same name already exists in the file (fb_library.blend pre-defines
+# with the same name already exists in the file (rigged_reference.blend pre-defines
 # Wrist_Watch_*_LOD0 as weight donors, so the GLB's identically-named meshes
 # get renamed). Strip that suffix when matching against caller-supplied names.
 _DUP_SUFFIX = re.compile(r"\.\d{3}$")
@@ -59,7 +59,7 @@ def parse_args():
                     bucket.append(a)
             return args[0], args[1], rigid, delete
     raise RuntimeError(
-        "Usage: blender fb_library.blend --background --python avatar_convert.py "
+        "Usage: blender rigged_reference.blend --background --python avatar_convert.py "
         "-- input.glb output.fbx [rigid_mesh_name ...] [--delete mesh_name ...]"
     )
 
@@ -109,6 +109,25 @@ def transfer_weights(target, source):
     select_only(target)
     if target.vertex_groups:
         bpy.ops.object.vertex_group_normalize_all(lock_active=False)
+
+
+def rename_skin_meshes(avatar_root):
+    """Rename any GLB mesh whose materials identify it as the avatar's base
+    skin (material name starts with ``Skin_Mat`` or ``Skin_Gradients_Mat``) to
+    ``Skin``. Blender will auto-suffix collisions (``Skin.001`` etc.).
+    """
+    for child in list(avatar_root.children):
+        if child.type != 'MESH' or child.data is None:
+            continue
+        for mat in child.data.materials:
+            if mat is None:
+                continue
+            n = mat.name
+            if n.startswith("Skin_Mat") or n.startswith("Skin_Gradients_Mat"):
+                old = child.name
+                child.name = "Skin"
+                print(f"Renamed skin mesh: {old} -> {child.name}")
+                break
 
 
 def rigid_bind(target, armature):
@@ -334,9 +353,13 @@ def main():
 
     armature = bpy.data.objects.get("Avatar_Skeleton")
     if armature is None or armature.type != 'ARMATURE':
-        raise RuntimeError("Avatar_Skeleton armature not found in fb_library.blend")
+        raise RuntimeError("Avatar_Skeleton armature not found in rigged_reference.blend")
 
     avatar_root = import_glb(glb_path)
+
+    # Rename any mesh whose materials identify it as the avatar's base skin
+    # (the GLB names skin meshes by index, so we detect them by material).
+    rename_skin_meshes(avatar_root)
 
     # Remove any meshes the caller asked to delete (e.g. an off-hand watch)
     # before rigging so they don't get weight-transferred or exported.
