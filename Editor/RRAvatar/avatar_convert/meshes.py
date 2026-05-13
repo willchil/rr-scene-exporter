@@ -1,27 +1,69 @@
-"""Mesh-level fixups: skin-mesh rename + merging skinned meshes for export."""
+"""Mesh-level fixups: name meshes after their material + merging for export."""
 
 import bpy
 
-from .utils import select_only
+from .utils import base_name, select_only
 
 
-def rename_skin_meshes(avatar_root):
-    """Rename any GLB mesh whose materials identify it as the avatar's base
-    skin (material name starts with ``Skin_Mat`` or ``Skin_Gradients_Mat``) to
-    ``Skin``. Blender will auto-suffix collisions (``Skin.001`` etc.).
+# Rec Room exports its avatar materials with their Unity runtime suffixes
+# baked into the name. Strip those, plus the conventional ``mat_`` /
+# ``_mat`` decorations, to derive a clean mesh name.
+_UNITY_NAME_SUFFIXES = ("(Instance)", "(Clone)")
+
+
+def clean_material_name(name):
+    if not name:
+        return name
+    # rigged_reference.blend may already define a material with this name, in
+    # which case Blender appends ``.001`` (etc.) when importing the GLB --
+    # strip that before we look for the Unity-runtime suffixes.
+    name = base_name(name).rstrip()
+    # Names can carry ``(Clone)``, ``(Instance)`` or both (in either order,
+    # depending on whether the source was a prefab clone, an instanced
+    # material, or both). Peel them off one at a time.
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _UNITY_NAME_SUFFIXES:
+            if name.endswith(suffix):
+                name = name[:-len(suffix)].rstrip()
+                changed = True
+    if name.lower().startswith("mat_"):
+        name = name[4:]
+    if name.lower().endswith("_mat"):
+        name = name[:-4]
+    return name
+
+
+def rename_meshes_by_material(avatar_root):
+    """Rename every mesh under ``avatar_root`` to its first material's cleaned
+    name. Meshes whose raw GLB node name identifies them as a watch are
+    instead renamed to the literal ``Watch`` so the Unity-side UI's single
+    ``Watch`` toggle (and any post-conversion references) line up regardless
+    of which side survived the off-hand deletion. Meshes without a usable
+    material keep their original name. Blender auto-suffixes collisions with
+    ``.001``, ``.002``, ... so duplicates remain unique on the data side;
+    ``base_name`` strips that suffix when matching against caller-supplied
+    rigid/delete names.
     """
     for child in list(avatar_root.children):
-        if child.type != 'MESH' or child.data is None:
+        if child.type != 'MESH':
             continue
-        for mat in child.data.materials:
-            if mat is None:
-                continue
-            n = mat.name
-            if n.startswith("Skin_Mat") or n.startswith("Skin_Gradients_Mat"):
-                old = child.name
-                child.name = "Skin"
-                print(f"Renamed skin mesh: {old} -> {child.name}")
-                break
+        new_name = None
+        if "watch" in child.name.lower():
+            new_name = "Watch"
+        elif child.data is not None:
+            for mat in child.data.materials:
+                if mat is None:
+                    continue
+                cleaned = clean_material_name(mat.name)
+                if cleaned:
+                    new_name = cleaned
+                    break
+        if new_name and new_name != child.name:
+            old = child.name
+            child.name = new_name
+            print(f"Renamed mesh: {old} -> {child.name}")
 
 
 def merge_skinned_meshes(avatar_root, targets, name="Body"):

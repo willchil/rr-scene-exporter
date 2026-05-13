@@ -27,6 +27,12 @@ namespace RRSceneExporter.RRAvatar
         private DefaultAsset lastScannedGlb;
         private List<string> meshNames = new List<string>();
         private HashSet<string> skinMeshNames = new HashSet<string>();
+        // Raw GLB node names of every watch mesh (one per side). Kept
+        // separately because the toggle list collapses all watches to a
+        // single ``Watch`` entry; the raw names are needed to delete the
+        // off-hand watch by exact name on the Python side.
+        private List<string> watchNodeNames = new List<string>();
+        private const string WatchDisplayName = "Watch";
         private Vector2 rigidScroll;
 
         [MenuItem("Rec Room Exporter/Convert Avatar")]
@@ -95,8 +101,7 @@ namespace RRSceneExporter.RRAvatar
 
             if (glbAsset != null && meshNames.Count > 0)
             {
-                bool hasWatch = meshNames.Any(
-                    n => n.StartsWith("Wrist_Watch_", StringComparison.Ordinal));
+                bool hasWatch = watchNodeNames.Count > 0;
                 if (hasWatch)
                 {
                     EditorGUILayout.Space();
@@ -126,7 +131,11 @@ namespace RRSceneExporter.RRAvatar
                     if (skinMeshNames.Contains(name))
                         continue;
                     bool was = rigidMeshes.Contains(name);
-                    bool now = EditorGUILayout.ToggleLeft(name, was);
+                    // Display-only: swap underscores for spaces in the toggle
+                    // label. The stored ``rigidMeshes`` entries (and the names
+                    // sent to avatar_convert.py) keep the underscore form so
+                    // they match the Blender object names.
+                    bool now = EditorGUILayout.ToggleLeft(name.Replace('_', ' '), was);
                     if (now && !was)
                         rigidMeshes.Add(name);
                     else if (!now && was)
@@ -314,22 +323,54 @@ namespace RRSceneExporter.RRAvatar
         // ----- Rigid-mesh scan ---------------------------------------------------
 
         /// <summary>
+        /// True if the mesh name looks like a watch (case-insensitive
+        /// substring match on "watch"). Robust to both ``Wrist_Watch_*`` and
+        /// ``Watch_Wrist_*`` naming flavours produced by the material-name
+        /// renamer.
+        /// </summary>
+        private static bool IsWatchMesh(string name)
+        {
+            return !string.IsNullOrEmpty(name) &&
+                   name.IndexOf("watch", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// True if a watch-mesh name carries an ``_L`` / ``_R`` (or ``L_`` /
+        /// ``R_``) token identifying which wrist it belongs to. Used by the
+        /// watch-hand selector to delete the off-hand watch before rigging.
+        /// </summary>
+        private static bool IsWatchSide(string name, bool left)
+        {
+            if (!IsWatchMesh(name)) return false;
+            char side = left ? 'L' : 'R';
+            for (int i = 0; i < name.Length; i++)
+            {
+                if (name[i] != side) continue;
+                bool prevSep = i == 0 || name[i - 1] == '_';
+                bool nextSep = i == name.Length - 1 || name[i + 1] == '_';
+                if (prevSep && nextSep)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Compute the set of GLB mesh names that should be deleted from the avatar
-        /// before rigging, based on the current ``watchHand`` selection. Names are
-        /// matched against the scanned ``meshNames`` list (prefix match on
-        /// ``Wrist_Watch_L`` / ``Wrist_Watch_R``).
+        /// before rigging, based on the current ``watchHand`` selection. Yields
+        /// the raw GLB node names of the watches on the unselected side(s) so
+        /// avatar_convert.py can match them before any renaming.
         /// </summary>
         private IEnumerable<string> ComputeDeleteMeshes()
         {
             bool deleteLeft  = watchHand == WatchHand.Right || watchHand == WatchHand.None;
             bool deleteRight = watchHand == WatchHand.Left  || watchHand == WatchHand.None;
 
-            foreach (string name in meshNames)
+            foreach (string raw in watchNodeNames)
             {
-                if (deleteLeft && name.StartsWith("Wrist_Watch_L_", StringComparison.Ordinal))
-                    yield return name;
-                else if (deleteRight && name.StartsWith("Wrist_Watch_R_", StringComparison.Ordinal))
-                    yield return name;
+                if (deleteLeft && IsWatchSide(raw, left: true))
+                    yield return raw;
+                else if (deleteRight && IsWatchSide(raw, left: false))
+                    yield return raw;
             }
         }
 
@@ -343,6 +384,7 @@ namespace RRSceneExporter.RRAvatar
             lastScannedGlb = glbAsset;
             meshNames.Clear();
             skinMeshNames.Clear();
+            watchNodeNames.Clear();
 
             if (glbAsset == null)
             {
@@ -357,11 +399,27 @@ namespace RRSceneExporter.RRAvatar
 
             try
             {
-                foreach (var (name, isSkin) in ReadGlbMeshNodes(fullPath))
+                // Two GLB nodes can share a material and therefore resolve to
+                // the same cleaned display name; dedupe so the rigid-mesh
+                // toggle list shows each name once. Watch meshes are stored
+                // separately by their raw node names (so the off-hand watch
+                // can still be deleted by exact name) and collapse to a
+                // single ``Watch`` entry in the display list.
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var (display, raw, isSkin, isWatch) in ReadGlbMeshNodes(fullPath))
                 {
-                    meshNames.Add(name);
+                    if (isWatch)
+                    {
+                        watchNodeNames.Add(raw);
+                        if (seen.Add(WatchDisplayName))
+                            meshNames.Add(WatchDisplayName);
+                        continue;
+                    }
+                    if (!seen.Add(display))
+                        continue;
+                    meshNames.Add(display);
                     if (isSkin)
-                        skinMeshNames.Add(name);
+                        skinMeshNames.Add(display);
                 }
             }
             catch (Exception ex)
@@ -373,26 +431,40 @@ namespace RRSceneExporter.RRAvatar
             // that are skin meshes (which are no longer rigid-eligible).
             rigidMeshes.RemoveAll(n => !meshNames.Contains(n) || skinMeshNames.Contains(n));
 
-            // Default any Wrist_Watch_* meshes to rigid (the watch is a solid
-            // accessory that should follow the wrist bone without deforming).
-            foreach (string name in meshNames)
+            // Default the watch to rigid (it's a solid accessory that should
+            // follow the wrist bone without deforming). When the GLB contains
+            // no watch mesh at all, fall back to defaulting every non-skin
+            // mesh to rigid so the typical "everything but the body" case
+            // doesn't require the user to manually tick each toggle.
+            if (watchNodeNames.Count > 0)
             {
-                if (name.StartsWith("Wrist_Watch_", StringComparison.Ordinal) &&
-                    !rigidMeshes.Contains(name))
+                if (!rigidMeshes.Contains(WatchDisplayName))
+                    rigidMeshes.Add(WatchDisplayName);
+            }
+            else
+            {
+                foreach (string name in meshNames)
                 {
-                    rigidMeshes.Add(name);
+                    if (skinMeshNames.Contains(name))
+                        continue;
+                    if (!rigidMeshes.Contains(name))
+                        rigidMeshes.Add(name);
                 }
             }
         }
 
         /// <summary>
-        /// Parse a .glb file's JSON chunk and return every node that references
-        /// a mesh, along with whether that mesh uses a "skin" material (one whose
-        /// name starts with ``Skin_Mat`` or ``Skin_Gradients_Mat``). The returned
-        /// node names match the Blender object names produced by
-        /// ``bpy.ops.import_scene.gltf``.
+        /// Parse a .glb file's JSON chunk and return one entry per node that
+        /// references a mesh. ``DisplayName`` is the cleaned first-material
+        /// name (or the literal ``"Watch"`` for any node whose raw glTF name
+        /// contains ``watch`` case-insensitively); ``RawNodeName`` is the
+        /// original glTF node name (needed to match the off-hand watch by
+        /// exact name on the Python side, before any rename runs).
+        /// ``IsSkin`` is derived from the raw material name(s) so the
+        /// skin-mesh check stays robust across the rename.
         /// </summary>
-        private static IEnumerable<(string Name, bool IsSkin)> ReadGlbMeshNodes(string glbPath)
+        private static IEnumerable<(string DisplayName, string RawNodeName, bool IsSkin, bool IsWatch)>
+            ReadGlbMeshNodes(string glbPath)
         {
             byte[] bytes = File.ReadAllBytes(glbPath);
             if (bytes.Length < 20 ||
@@ -414,7 +486,8 @@ namespace RRSceneExporter.RRAvatar
 
             // Walk three top-level arrays: materials (index -> name), meshes
             // (index -> set of material indices used by its primitives), and
-            // nodes (yielding name + mesh index). Combine to flag skin meshes.
+            // nodes (yielding name + mesh index). Combine to flag skin meshes
+            // and to derive a display name from the first material.
             var materialNames = ScanArrayObjects(json, "materials")
                 .Select(body => ExtractStringProp(body, "name") ?? "")
                 .ToList();
@@ -423,34 +496,80 @@ namespace RRSceneExporter.RRAvatar
                 .Select(CollectPrimitiveMaterialIndices)
                 .ToList();
 
-            var results = new List<(string, bool)>();
+            var results = new List<(string, string, bool, bool)>();
             int nodeIdx = -1;
             foreach (string body in ScanArrayObjects(json, "nodes"))
             {
                 nodeIdx++;
-                string name = ExtractStringProp(body, "name");
-                if (string.IsNullOrEmpty(name))
+                string nodeName = ExtractStringProp(body, "name");
+                if (string.IsNullOrEmpty(nodeName))
                     continue;
                 if (!HasNumericProp(body, "mesh"))
                     continue;
                 int meshIndex = ExtractIntProp(body, "mesh");
                 bool isSkin = false;
+                string firstMatName = null;
                 if (meshIndex >= 0 && meshIndex < meshMaterialIndices.Count)
                 {
                     foreach (int matIdx in meshMaterialIndices[meshIndex])
                     {
                         if (matIdx < 0 || matIdx >= materialNames.Count)
                             continue;
-                        if (IsSkinMaterialName(materialNames[matIdx]))
-                        {
+                        string mname = materialNames[matIdx];
+                        if (firstMatName == null && !string.IsNullOrEmpty(mname))
+                            firstMatName = mname;
+                        if (IsSkinMaterialName(mname))
                             isSkin = true;
-                            break;
-                        }
                     }
                 }
-                results.Add((name, isSkin));
+
+                bool isWatch = IsWatchMesh(nodeName);
+                string displayName;
+                if (isWatch)
+                {
+                    displayName = WatchDisplayName;
+                }
+                else
+                {
+                    string cleaned = CleanMaterialName(firstMatName);
+                    displayName = !string.IsNullOrEmpty(cleaned) ? cleaned : nodeName;
+                }
+                results.Add((displayName, nodeName, isSkin, isWatch));
             }
             return results;
+        }
+
+        /// <summary>
+        /// Strip the ``" (Clone) (Instance)"`` Unity-runtime suffix and the
+        /// conventional ``mat_`` prefix / ``_mat`` suffix (case-insensitive)
+        /// from a material name. Mirrors ``avatar_convert.meshes.clean_material_name``
+        /// so the C# UI and the Blender script agree on every mesh's new name.
+        /// </summary>
+        private static string CleanMaterialName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return name;
+            // Names can carry ``(Clone)``, ``(Instance)`` or both (in either
+            // order); peel them off one at a time so a name with only one
+            // of them is still handled.
+            name = name.TrimEnd();
+            bool changed = true;
+            while (changed)
+            {
+                changed = false;
+                foreach (string suffix in new[] { "(Instance)", "(Clone)" })
+                {
+                    if (name.EndsWith(suffix, StringComparison.Ordinal))
+                    {
+                        name = name.Substring(0, name.Length - suffix.Length).TrimEnd();
+                        changed = true;
+                    }
+                }
+            }
+            if (name.StartsWith("mat_", StringComparison.OrdinalIgnoreCase))
+                name = name.Substring(4);
+            if (name.EndsWith("_mat", StringComparison.OrdinalIgnoreCase))
+                name = name.Substring(0, name.Length - 4);
+            return name;
         }
 
         private static bool IsSkinMaterialName(string name)

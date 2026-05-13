@@ -8,3 +8,8 @@ Thumbs.db
 *.csproj
 *.sln
 *.user
+
+# Python bytecode cache (written by Blender when running avatar_convert)
+__pycache__/
+*.pyc
+*__pycache__.meta
