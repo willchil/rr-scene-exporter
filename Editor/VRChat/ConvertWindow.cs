@@ -11,7 +11,7 @@ namespace RRSceneExporter.VRChat
 {
     public static class ConvertWindow
     {
-        [MenuItem("Rec Room/Convert materials")]
+        [MenuItem("Rec Room Exporter/Convert materials")]
         private static void Convert()
         {
             Scene scene = EditorSceneManager.GetActiveScene();

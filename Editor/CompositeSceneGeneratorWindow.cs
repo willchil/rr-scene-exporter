@@ -30,13 +30,13 @@ namespace CompositeSceneGenerator
                 && Directory.GetFiles(fullDir, "*.cs", SearchOption.AllDirectories).Length > 0;
         }
 
-        [MenuItem("Rec Room/Generate Composite Scene", true)]
+        [MenuItem("Rec Room Exporter/Generate Composite Scene", true)]
         private static bool ValidateShowWindow()
         {
             return ProtosExist();
         }
 
-        [MenuItem("Rec Room/Generate Composite Scene")]
+        [MenuItem("Rec Room Exporter/Generate Composite Scene")]
         public static void ShowWindow()
         {
             GetWindow<CompositeSceneGeneratorWindow>("Composite Scene Generator");

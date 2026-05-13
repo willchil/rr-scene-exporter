@@ -56,7 +56,7 @@ Follow the [Installation](#installation) instructions above to add the package t
 ### 2. Generate protobuf classes
 
 1. Copy the `descriptor_set.binpb` file from your data export into your project (e.g. into an `Assets/RoomExport/` folder).
-2. Open **Rec Room > Generate Protobuf Classes**.
+2. Open **Rec Room Exporter > Generate Protobuf Classes**.
 3. Assign the `descriptor_set.binpb` file and set the `protoc` path if it wasn't auto-detected.
 4. Click **Generate**. Unity will compile the generated C# classes, which will be used when generating your scenes.
 
@@ -67,7 +67,7 @@ You only need to do this once per project.
 1. Copy the subroom files from your data export into the project:
    - `persisted_room_data.binpb` (required) — the room layout data
    - `Scene.glb` — maker pen geometry
-2. Open **Rec Room > Generate Composite Scene**.
+2. Open **Rec Room Exporter > Generate Composite Scene**.
 3. Fill in the fields:
    - **Built-In Asset Registry** — auto-populated from the Rec Room Studio package. This maps prefab GUIDs to the actual prefab assets.
    - **Blender Path** — auto-detected or set manually.
@@ -112,7 +112,7 @@ The VRChat-specific tools compile automatically when the VRChat SDK (`com.vrchat
 VRChat uses the Built-in render pipeline, but the exported materials use URP shaders. To convert them:
 
 1. Open the imported scene.
-2. Go to **Rec Room > Convert materials**.
+2. Go to **Rec Room Exporter > Convert materials**.
 
 This reads the shader log file to determine what each material's original shader was, then remaps them to Built-in pipeline equivalents:
 - Lit materials → `Standard` shader (with correct albedo, normal maps, metallic, smoothness, and emission)

@@ -26,7 +26,7 @@ namespace RRSceneExporter.RRAvatar
         private List<string> meshNames = new List<string>();
         private Vector2 rigidScroll;
 
-        [MenuItem("Rec Room/Convert Avatar")]
+        [MenuItem("Rec Room Exporter/Convert Avatar")]
         public static void ShowWindow()
         {
             GetWindow<ConvertAvatarWindow>("Convert Avatar");
@@ -36,6 +36,32 @@ namespace RRSceneExporter.RRAvatar
         {
             if (string.IsNullOrEmpty(blenderPath))
                 blenderPath = AvatarConverter.FindBlenderPath() ?? "";
+
+            if (glbAsset == null)
+                glbAsset = FindDefaultAvatarGlb();
+        }
+
+        /// <summary>
+        /// Look for an asset matching ``Avatar_*.glb`` anywhere in the project and
+        /// return it. Used to pre-populate the GLB field when the window opens.
+        /// </summary>
+        private static DefaultAsset FindDefaultAvatarGlb()
+        {
+            // AssetDatabase.FindAssets doesn't support full-glob filters, but a
+            // name token of "Avatar_" plus t:DefaultAsset narrows the search to
+            // candidates we can then filter by extension and prefix.
+            string[] guids = AssetDatabase.FindAssets("Avatar_ t:DefaultAsset");
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (!path.EndsWith(".glb", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                string fileName = Path.GetFileName(path);
+                if (!fileName.StartsWith("Avatar_", StringComparison.Ordinal))
+                    continue;
+                return AssetDatabase.LoadAssetAtPath<DefaultAsset>(path);
+            }
+            return null;
         }
 
         private void OnGUI()

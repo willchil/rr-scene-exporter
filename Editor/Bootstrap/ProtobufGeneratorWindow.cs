@@ -73,7 +73,7 @@ namespace CompositeSceneGenerator.Bootstrap
         private const string GeneratedDir = "Assets/RecRoomCache/Generated";
         private const string ScriptingDefine = "RECROOM_PROTOS_GENERATED";
 
-        [MenuItem("Rec Room/Generate Protobuf Classes")]
+        [MenuItem("Rec Room Exporter/Generate Protobuf Classes")]
         public static void ShowWindow()
         {
             GetWindow<ProtobufGeneratorWindow>("Protobuf Generator");
