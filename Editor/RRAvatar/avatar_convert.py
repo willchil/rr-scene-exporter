@@ -47,11 +47,13 @@ def parse_args():
         if len(args) >= 2:
             # Trailing args are mesh names: bare names mark rigid binds; names
             # after a ``--delete`` marker are removed from the avatar before
-            # rigging. ``--vrchat`` is a standalone toggle (it has no value)
-            # that opts into VRChat-specific rig adjustments.
+            # rigging. ``--vrchat`` and ``--merge-meshes`` are standalone
+            # toggles (no value) for the corresponding optional rig-shaping
+            # passes.
             rigid = []
             delete = []
             vrchat = False
+            merge = False
             bucket = rigid
             for a in args[2:]:
                 if a == "--delete":
@@ -60,12 +62,16 @@ def parse_args():
                 if a == "--vrchat":
                     vrchat = True
                     continue
+                if a == "--merge-meshes":
+                    merge = True
+                    continue
                 if a:
                     bucket.append(a)
-            return args[0], args[1], rigid, delete, vrchat
+            return args[0], args[1], rigid, delete, vrchat, merge
     raise RuntimeError(
         "Usage: blender rigged_reference.blend --background --python avatar_convert.py "
-        "-- input.glb output.fbx [rigid_mesh_name ...] [--delete mesh_name ...] [--vrchat]"
+        "-- input.glb output.fbx [rigid_mesh_name ...] [--delete mesh_name ...] "
+        "[--vrchat] [--merge-meshes]"
     )
 
 
@@ -230,6 +236,47 @@ def rigid_bind(target, armature):
     vg = target.vertex_groups.new(name=best_name)
     vg.add(list(range(len(target.data.vertices))), 1.0, 'REPLACE')
     return best_name
+
+
+def merge_skinned_meshes(avatar_root, targets, name="Body"):
+    """Join every mesh in ``targets`` into a single mesh so the FBX produces
+    one ``SkinnedMeshRenderer`` in Unity.
+
+    Helps the VRChat performance ranking (which caps "Skinned Mesh Renderers"
+    at 1 for the highest tier) and is generally a draw-call win elsewhere.
+    Blender's ``object.join`` unions vertex groups by name, shape keys by
+    name, and material slots by reference, so the merged mesh keeps every
+    weight, blendshape and material from its sources -- it just lives under
+    one renderer with multiple submeshes.
+
+    Assumes every mesh in ``targets`` is already a real skinned mesh (rigid
+    binds have been converted by ``rigid_bind`` to a single 100%-weighted
+    vertex group on the target bone, and ``rig_meshes`` has added an Armature
+    modifier to all of them).
+
+    Returns the new ``targets`` list (a single-element list containing the
+    merged mesh, or the original list if there is nothing to merge).
+    """
+    meshes = [t for t in targets if t and t.type == 'MESH' and t.name in bpy.data.objects]
+    if len(meshes) <= 1:
+        return meshes
+
+    primary = meshes[0]
+    select_only(*meshes)
+    bpy.context.view_layer.objects.active = primary
+    bpy.ops.object.join()
+
+    # Rename the survivor and its mesh datablock so Unity gets a clean
+    # "Body" SkinnedMeshRenderer instead of whatever the first source mesh
+    # happened to be called.
+    primary.name = name
+    if primary.data is not None:
+        primary.data.name = name
+
+    print(f"Merged {len(meshes)} meshes into {primary.name} "
+          f"({len(primary.data.materials)} material slots, "
+          f"{len(primary.vertex_groups)} vertex groups)")
+    return [primary]
 
 
 def fix_material_tints():
@@ -413,7 +460,7 @@ def export_fbx(output_fbx, avatar_root, targets, armature):
 # ---------------------------------------------------------------------------
 
 def main():
-    glb_path, output_fbx, rigid_names, delete_names, vrchat = parse_args()
+    glb_path, output_fbx, rigid_names, delete_names, vrchat, merge = parse_args()
     print(f"GLB:    {glb_path}")
     print(f"Output: {output_fbx}")
     if rigid_names:
@@ -422,6 +469,8 @@ def main():
         print(f"Delete: {delete_names}")
     if vrchat:
         print("VRChat: enabled")
+    if merge:
+        print("Merge:  enabled")
 
     armature = bpy.data.objects.get("Avatar_Skeleton")
     if armature is None or armature.type != 'ARMATURE':
@@ -449,6 +498,8 @@ def main():
     fix_spine_hierarchy(armature)
     if vrchat:
         exclude_arm_helper_bones(armature)
+    if merge:
+        targets = merge_skinned_meshes(avatar_root, targets)
     fix_material_tints()
     unpack_textures(output_fbx)
     export_fbx(output_fbx, avatar_root, targets, armature)

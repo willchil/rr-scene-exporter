@@ -87,13 +87,17 @@ namespace RRSceneExporter.RRAvatar
         /// May be null or empty.</param>
         /// <param name="vrchat">When true, applies VRChat-specific rig adjustments
         /// (e.g. stripping forearm helper bones to satisfy the SDK's humanoid validator).</param>
+        /// <param name="mergeMeshes">When true, all skinned meshes are joined into a
+        /// single mesh in Blender before FBX export, producing one
+        /// <c>SkinnedMeshRenderer</c> in Unity (with multiple submeshes).</param>
         public static bool ConvertGlbToRiggedFbx(
             string blenderPath,
             string glbPath,
             string fbxPath,
             System.Collections.Generic.IEnumerable<string> rigidMeshes = null,
             System.Collections.Generic.IEnumerable<string> deleteMeshes = null,
-            bool vrchat = false)
+            bool vrchat = false,
+            bool mergeMeshes = false)
         {
             string scriptPath = ResolvePackageFile("avatar_convert.py");
             string blendPath = ResolvePackageFile("rigged_reference.blend");
@@ -143,6 +147,10 @@ namespace RRSceneExporter.RRAvatar
             if (vrchat)
             {
                 sb.Append(" --vrchat");
+            }
+            if (mergeMeshes)
+            {
+                sb.Append(" --merge-meshes");
             }
             string args = sb.ToString();
             Debug.Log($"[AvatarConverter] Running: \"{blenderPath}\" {args}");

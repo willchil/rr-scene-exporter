@@ -20,6 +20,7 @@ namespace RRSceneExporter.RRAvatar
         [SerializeField] private string blenderPath;
         [SerializeField] private DefaultAsset glbAsset;
         [SerializeField] private WatchHand watchHand = WatchHand.Left;
+        [SerializeField] private bool mergeMeshes = true;
         [SerializeField] private List<string> rigidMeshes = new List<string>();
 
         private DefaultAsset lastScannedGlb;
@@ -134,6 +135,16 @@ namespace RRSceneExporter.RRAvatar
             }
 
             EditorGUILayout.Space();
+            mergeMeshes = EditorGUILayout.Toggle(
+                new GUIContent("Merge Skinned Meshes",
+                    "Join every skinned mesh into a single mesh during conversion so the " +
+                    "imported avatar uses one SkinnedMeshRenderer (with multiple submeshes). " +
+                    "Recommended for VRChat (the SDK's performance ranking caps Skinned Mesh " +
+                    "Renderers at 1) and generally a draw-call win elsewhere. Disable if you " +
+                    "need per-region access to the imported meshes."),
+                mergeMeshes);
+
+            EditorGUILayout.Space();
 
             bool valid = true;
 
@@ -210,10 +221,11 @@ namespace RRSceneExporter.RRAvatar
                     rigidMeshes.Where(n => !ComputeDeleteMeshes().Contains(n)),
                     ComputeDeleteMeshes(),
 #if HAS_VRCHAT_SDK
-                    vrchat: true);
+                    vrchat: true,
 #else
-                    vrchat: false);
+                    vrchat: false,
 #endif
+                    mergeMeshes: mergeMeshes);
             }
             finally
             {
