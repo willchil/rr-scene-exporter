@@ -208,7 +208,12 @@ namespace RRSceneExporter.RRAvatar
                 ok = AvatarConverter.ConvertGlbToRiggedFbx(
                     blenderPath, glbFullPath, fbxFullPath,
                     rigidMeshes.Where(n => !ComputeDeleteMeshes().Contains(n)),
-                    ComputeDeleteMeshes());
+                    ComputeDeleteMeshes(),
+#if HAS_VRCHAT_SDK
+                    vrchat: true);
+#else
+                    vrchat: false);
+#endif
             }
             finally
             {
@@ -232,6 +237,7 @@ namespace RRSceneExporter.RRAvatar
                     texAssetDir,
                     ImportAssetOptions.ImportRecursive | ImportAssetOptions.ForceSynchronousImport);
                 MarkNormalMapTextures(texAssetDir);
+                EnableStreamingMipmaps(texAssetDir);
             }
 
             AssetDatabase.ImportAsset(fbxAssetPath, ImportAssetOptions.ForceSynchronousImport);
@@ -243,6 +249,19 @@ namespace RRSceneExporter.RRAvatar
                 importer.avatarSetup = ModelImporterAvatarSetup.CreateFromThisModel;
                 importer.importAnimation = false;
                 importer.materialImportMode = ModelImporterMaterialImportMode.ImportViaMaterialDescription;
+
+                // Avoid the "Blendshape Normals: Calculate without Legacy"
+                // warning (VRChat flags it as an upload-size issue, and the
+                // calculated normals add data we don't need — Rec Room
+                // avatars ship without blendshapes).
+                importer.importBlendShapeNormals = ModelImporterNormals.None;
+
+#if HAS_VRCHAT_SDK
+                // VRChat requires meshes to be CPU-readable so the SDK can
+                // inspect/process them at upload time. Outside VRChat projects
+                // we leave this off to halve runtime mesh memory.
+                importer.isReadable = true;
+#endif
 
                 // Build a HumanDescription that maps Rec Room's Jnt.* bones to
                 // Unity's humanoid slots. Without this, Unity's auto-mapper
@@ -792,6 +811,51 @@ namespace RRSceneExporter.RRAvatar
         }
 
         /// <summary>
+        /// Enable ``streamingMipmaps`` and switch the mipmap filter to
+        /// ``Kaiser`` on every mipmapped texture in <paramref name="texAssetDir"/>.
+        /// Suppresses the VRChat "mipmapped textures without Streaming Mip Maps"
+        /// warning (and the "Box mipmap filtering blurs distant textures" hint),
+        /// and is a no-op in projects that don't have Texture Streaming enabled
+        /// in Quality Settings.
+        /// </summary>
+        private static void EnableStreamingMipmaps(string texAssetDir)
+        {
+            string fullDir = Path.GetFullPath(texAssetDir);
+            if (!Directory.Exists(fullDir))
+                return;
+
+            string[] extensions = { "*.png", "*.jpg", "*.tga" };
+            int updated = 0;
+            foreach (string ext in extensions)
+            {
+                foreach (string file in Directory.GetFiles(fullDir, ext))
+                {
+                    string assetPath = texAssetDir + "/" + Path.GetFileName(file);
+                    var texImporter = AssetImporter.GetAtPath(assetPath) as TextureImporter;
+                    if (texImporter == null) continue;
+                    if (!texImporter.mipmapEnabled) continue;
+                    bool changed = false;
+                    if (!texImporter.streamingMipmaps)
+                    {
+                        texImporter.streamingMipmaps = true;
+                        changed = true;
+                    }
+                    if (texImporter.mipmapFilter != TextureImporterMipFilter.KaiserFilter)
+                    {
+                        texImporter.mipmapFilter = TextureImporterMipFilter.KaiserFilter;
+                        changed = true;
+                    }
+                    if (!changed) continue;
+                    texImporter.SaveAndReimport();
+                    updated++;
+                }
+            }
+
+            if (updated > 0)
+                UnityEngine.Debug.Log($"[ConvertAvatar] Updated mipmap settings (streaming + Kaiser filter) on {updated} textures.");
+        }
+
+        /// <summary>
         /// Extract embedded FBX materials into a sibling ``_Materials`` folder so
         /// they can be edited / version-controlled / shared. Mirrors the approach
         /// in <c>GlbConverter.ConvertAndImportGlb</c>.
@@ -850,10 +914,7 @@ namespace RRSceneExporter.RRAvatar
                 if (mat == null)
                     continue;
 
-                if (mat.HasProperty("_AlphaClip"))
-                    mat.SetFloat("_AlphaClip", 1f);
-                mat.EnableKeyword("_ALPHATEST_ON");
-                mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
+                ApplyAlphaClip(mat);
 
                 EditorUtility.SetDirty(mat);
                 patched++;
@@ -864,6 +925,43 @@ namespace RRSceneExporter.RRAvatar
                 AssetDatabase.SaveAssets();
                 UnityEngine.Debug.Log($"[ConvertAvatar] Enabled alpha clipping on {patched} AvatarFace material(s).");
             }
+        }
+
+        /// <summary>
+        /// Switch <paramref name="mat"/> into alpha-test (cutout) mode. Handles
+        /// both Built-in Render Pipeline (Standard shader: ``_Mode``, blend
+        /// states, ``_Cutoff``) and URP/HDRP Lit shaders (``_AlphaClip`` +
+        /// ``_Surface``). The ``_ALPHATEST_ON`` keyword is shared.
+        /// </summary>
+        private static void ApplyAlphaClip(Material mat)
+        {
+            // URP / HDRP Lit: a single boolean property toggles alpha clipping.
+            if (mat.HasProperty("_AlphaClip"))
+                mat.SetFloat("_AlphaClip", 1f);
+            // URP also exposes a Surface enum (0 = Opaque, 1 = Transparent);
+            // alpha clip lives under Opaque, so leave it untouched.
+
+            // Built-in Standard shader: ``_Mode`` is an enum (0 Opaque, 1 Cutout,
+            // 2 Fade, 3 Transparent). Cutout requires opaque blend states +
+            // ZWrite + the alpha-test keyword + an AlphaTest queue.
+            if (mat.HasProperty("_Mode"))
+            {
+                mat.SetFloat("_Mode", 1f); // Cutout
+                if (mat.HasProperty("_SrcBlend"))
+                    mat.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.One);
+                if (mat.HasProperty("_DstBlend"))
+                    mat.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.Zero);
+                if (mat.HasProperty("_ZWrite"))
+                    mat.SetFloat("_ZWrite", 1f);
+                mat.DisableKeyword("_ALPHABLEND_ON");
+                mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            }
+
+            if (mat.HasProperty("_Cutoff"))
+                mat.SetFloat("_Cutoff", 0.5f);
+
+            mat.EnableKeyword("_ALPHATEST_ON");
+            mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
         }
     }
 }

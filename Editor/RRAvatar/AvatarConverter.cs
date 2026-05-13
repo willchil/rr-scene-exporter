@@ -85,12 +85,15 @@ namespace RRSceneExporter.RRAvatar
         /// <param name="deleteMeshes">Names of meshes that should be removed from the avatar
         /// before rigging (e.g. the off-hand watch when only one wrist should carry it).
         /// May be null or empty.</param>
+        /// <param name="vrchat">When true, applies VRChat-specific rig adjustments
+        /// (e.g. stripping forearm helper bones to satisfy the SDK's humanoid validator).</param>
         public static bool ConvertGlbToRiggedFbx(
             string blenderPath,
             string glbPath,
             string fbxPath,
             System.Collections.Generic.IEnumerable<string> rigidMeshes = null,
-            System.Collections.Generic.IEnumerable<string> deleteMeshes = null)
+            System.Collections.Generic.IEnumerable<string> deleteMeshes = null,
+            bool vrchat = false)
         {
             string scriptPath = ResolvePackageFile("avatar_convert.py");
             string blendPath = ResolvePackageFile("rigged_reference.blend");
@@ -136,6 +139,10 @@ namespace RRSceneExporter.RRAvatar
                     }
                     sb.Append(" \"").Append(name).Append('"');
                 }
+            }
+            if (vrchat)
+            {
+                sb.Append(" --vrchat");
             }
             string args = sb.ToString();
             Debug.Log($"[AvatarConverter] Running: \"{blenderPath}\" {args}");

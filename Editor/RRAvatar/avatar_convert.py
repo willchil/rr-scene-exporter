@@ -47,20 +47,25 @@ def parse_args():
         if len(args) >= 2:
             # Trailing args are mesh names: bare names mark rigid binds; names
             # after a ``--delete`` marker are removed from the avatar before
-            # rigging.
+            # rigging. ``--vrchat`` is a standalone toggle (it has no value)
+            # that opts into VRChat-specific rig adjustments.
             rigid = []
             delete = []
+            vrchat = False
             bucket = rigid
             for a in args[2:]:
                 if a == "--delete":
                     bucket = delete
                     continue
+                if a == "--vrchat":
+                    vrchat = True
+                    continue
                 if a:
                     bucket.append(a)
-            return args[0], args[1], rigid, delete
+            return args[0], args[1], rigid, delete, vrchat
     raise RuntimeError(
         "Usage: blender rigged_reference.blend --background --python avatar_convert.py "
-        "-- input.glb output.fbx [rigid_mesh_name ...] [--delete mesh_name ...]"
+        "-- input.glb output.fbx [rigid_mesh_name ...] [--delete mesh_name ...] [--vrchat]"
     )
 
 
@@ -128,6 +133,71 @@ def rename_skin_meshes(avatar_root):
                 child.name = "Skin"
                 print(f"Renamed skin mesh: {old} -> {child.name}")
                 break
+
+
+def fix_spine_hierarchy(armature):
+    """Re-parent the shoulder and neck bones to ``Jnt.Spine.Chest``.
+
+    Unity humanoid (and the VRChat SDK validator in particular) requires that
+    both shoulders and the neck share the chest as their direct parent in the
+    bone hierarchy. The source rig parents them elsewhere, so we fix it here
+    in-memory before FBX export. ``use_connect=False`` and assigning ``parent``
+    in edit-mode preserve each bone's world-space head/tail.
+    """
+    desired_parent = "Jnt.Spine.Chest"
+    children = ("Jnt.Shoulder.L", "Jnt.Shoulder.R", "Jnt.Neck")
+
+    if desired_parent not in armature.data.bones:
+        print(f"  WARNING: parent bone {desired_parent} not found; skipping spine fix")
+        return
+
+    select_only(armature)
+    bpy.ops.object.mode_set(mode='EDIT')
+    try:
+        ebones = armature.data.edit_bones
+        new_parent = ebones.get(desired_parent)
+        for name in children:
+            child = ebones.get(name)
+            if child is None:
+                print(f"  WARNING: child bone {name} not found; skipping")
+                continue
+            old = child.parent.name if child.parent else "<none>"
+            if old == desired_parent:
+                continue
+            child.use_connect = False
+            child.parent = new_parent
+            print(f"  Re-parented {name}: {old} -> {desired_parent}")
+    finally:
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def exclude_arm_helper_bones(armature):
+    """Mark forearm tweak/roll helper bones as non-deform so the FBX exporter
+    (with ``use_armature_deform_only=True``) drops them.
+
+    VRChat-only: Unity orders sibling bones alphabetically when building the
+    imported skeleton. The Rec Room rig parents ``Jnt.ForearmRoll.Tweak.L`` and
+    ``Jnt.LowerArm.Tweak.L`` alongside ``Jnt.Hand.L`` under ``Jnt.LowerArm.L``;
+    ``F`` < ``H`` < ``L`` alphabetically, so ``Hand`` ends up as the *second*
+    child and the VRChat SDK warns "Hand is not first child of LowerArm: you
+    may have problems with Forearm rotations". Removing those helpers from the
+    exported skeleton fixes the warning. Forearm twist is handled by Unity's
+    humanoid ``lowerArmTwist`` setting at runtime.
+
+    Outside VRChat the warning is harmless and we keep these bones so any
+    deformation contribution from them is preserved.
+    """
+    targets = (
+        "Jnt.LowerArm.Tweak.L", "Jnt.LowerArm.Tweak.R",
+        "Jnt.ForearmRoll.Tweak.L", "Jnt.ForearmRoll.Tweak.R",
+    )
+    for name in targets:
+        bone = armature.data.bones.get(name)
+        if bone is None:
+            continue
+        if bone.use_deform:
+            bone.use_deform = False
+            print(f"  Marked {name} non-deform (excluded from FBX export)")
 
 
 def rigid_bind(target, armature):
@@ -343,13 +413,15 @@ def export_fbx(output_fbx, avatar_root, targets, armature):
 # ---------------------------------------------------------------------------
 
 def main():
-    glb_path, output_fbx, rigid_names, delete_names = parse_args()
+    glb_path, output_fbx, rigid_names, delete_names, vrchat = parse_args()
     print(f"GLB:    {glb_path}")
     print(f"Output: {output_fbx}")
     if rigid_names:
         print(f"Rigid:  {rigid_names}")
     if delete_names:
         print(f"Delete: {delete_names}")
+    if vrchat:
+        print("VRChat: enabled")
 
     armature = bpy.data.objects.get("Avatar_Skeleton")
     if armature is None or armature.type != 'ARMATURE':
@@ -374,6 +446,9 @@ def main():
                     bpy.data.meshes.remove(mesh_data)
 
     targets = rig_meshes(avatar_root, armature, rigid_names)
+    fix_spine_hierarchy(armature)
+    if vrchat:
+        exclude_arm_helper_bones(armature)
     fix_material_tints()
     unpack_textures(output_fbx)
     export_fbx(output_fbx, avatar_root, targets, armature)
