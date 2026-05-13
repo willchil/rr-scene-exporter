@@ -21,6 +21,7 @@ namespace RRSceneExporter.RRAvatar
         [SerializeField] private DefaultAsset glbAsset;
         [SerializeField] private WatchHand watchHand = WatchHand.Left;
         [SerializeField] private bool mergeMeshes = true;
+        [SerializeField] private bool enforceTpose = true;
         [SerializeField] private List<string> rigidMeshes = new List<string>();
 
         private DefaultAsset lastScannedGlb;
@@ -144,6 +145,15 @@ namespace RRSceneExporter.RRAvatar
                     "need per-region access to the imported meshes."),
                 mergeMeshes);
 
+            enforceTpose = EditorGUILayout.Toggle(
+                new GUIContent("Enforce T-Pose",
+                    "Rotate the rig's rest pose from Rec Room A-pose to T-pose before export. " +
+                    "Unity humanoid (and the VRChat SDK) calibrates muscle space relative to " +
+                    "T-pose, so leaving this off causes shipped animations (claps, dances, etc.) " +
+                    "to drive arms tucked into the torso. Disable only if you specifically need " +
+                    "the original A-pose rest preserved."),
+                enforceTpose);
+
             EditorGUILayout.Space();
 
             bool valid = true;
@@ -225,7 +235,8 @@ namespace RRSceneExporter.RRAvatar
 #else
                     vrchat: false,
 #endif
-                    mergeMeshes: mergeMeshes);
+                    mergeMeshes: mergeMeshes,
+                    enforceTpose: enforceTpose);
             }
             finally
             {

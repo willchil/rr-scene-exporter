@@ -90,6 +90,9 @@ namespace RRSceneExporter.RRAvatar
         /// <param name="mergeMeshes">When true, all skinned meshes are joined into a
         /// single mesh in Blender before FBX export, producing one
         /// <c>SkinnedMeshRenderer</c> in Unity (with multiple submeshes).</param>
+        /// <param name="enforceTpose">When true, rotates the rig's rest pose from
+        /// Rec Room A-pose to T-pose before export so Unity humanoid muscle
+        /// space and VRChat shipped animations align correctly.</param>
         public static bool ConvertGlbToRiggedFbx(
             string blenderPath,
             string glbPath,
@@ -97,7 +100,8 @@ namespace RRSceneExporter.RRAvatar
             System.Collections.Generic.IEnumerable<string> rigidMeshes = null,
             System.Collections.Generic.IEnumerable<string> deleteMeshes = null,
             bool vrchat = false,
-            bool mergeMeshes = false)
+            bool mergeMeshes = false,
+            bool enforceTpose = true)
         {
             string scriptPath = ResolvePackageFile("avatar_convert.py");
             string blendPath = ResolvePackageFile("rigged_reference.blend");
@@ -151,6 +155,10 @@ namespace RRSceneExporter.RRAvatar
             if (mergeMeshes)
             {
                 sb.Append(" --merge-meshes");
+            }
+            if (enforceTpose)
+            {
+                sb.Append(" --enforce-tpose");
             }
             string args = sb.ToString();
             Debug.Log($"[AvatarConverter] Running: \"{blenderPath}\" {args}");
