@@ -15,7 +15,7 @@ from .utils import base_name
 from .bones import exclude_arm_helper_bones, fix_spine_hierarchy
 from .glb_io import export_fbx, import_glb, unpack_textures
 from .materials import fix_material_tints
-from .meshes import merge_skinned_meshes, rename_meshes_by_material
+from .meshes import is_bean_avatar, merge_skinned_meshes, rename_meshes_by_material
 from .rigging import rig_meshes
 from .tpose import force_tpose
 
@@ -79,6 +79,12 @@ def main():
 
     avatar_root = import_glb(glb_path)
 
+    # The Bean (legless) avatar variant is identified by the absence of any
+    # watch mesh in the source GLB; routes body weight transfer to the MB
+    # donor instead of the FBA donor (both share the same skeleton).
+    bean = is_bean_avatar(avatar_root)
+    print(f"Avatar type: {'Bean (legless)' if bean else 'FBA (full body)'}")
+
     # Remove any meshes the caller asked to delete (e.g. an off-hand watch)
     # before rigging so they don't get weight-transferred or exported. Runs
     # BEFORE rename_meshes_by_material so the watch's raw GLB node name
@@ -100,7 +106,7 @@ def main():
     # Unity-side UI showed to the user.
     rename_meshes_by_material(avatar_root)
 
-    targets = rig_meshes(avatar_root, armature, rigid_names)
+    targets = rig_meshes(avatar_root, armature, rigid_names, bean=bean)
     fix_spine_hierarchy(armature)
     if vrchat:
         exclude_arm_helper_bones(armature, targets)

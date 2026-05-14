@@ -11,6 +11,21 @@ from .utils import base_name, select_only
 _UNITY_NAME_SUFFIXES = ("(Instance)", "(Clone)")
 
 
+def is_bean_avatar(avatar_root):
+    """A Rec Room avatar is the legless Mobile Bean variant iff the GLB
+    ships no watch mesh -- watches are FBA-only attachments, so their
+    absence is the canonical Bean signal. Must be called BEFORE the watch
+    delete pass (which can remove watches when ``WatchHand.None`` is
+    selected) and BEFORE ``rename_meshes_by_material`` (the rename
+    collapses both watches to the literal ``Watch`` but the substring
+    check below would still match -- ordering is just paranoia).
+    """
+    for child in avatar_root.children:
+        if child.type == 'MESH' and "watch" in child.name.lower():
+            return False
+    return True
+
+
 def clean_material_name(name):
     if not name:
         return name
