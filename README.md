@@ -47,6 +47,31 @@ The data export is produced by the final version of the Steam client, and is not
 
 After generating the protobuf classes, protoc is no longer needed.
 
+## Exporting an Avatar
+
+The avatar converter takes a `.glb` exported from the Rec Room game client and produces a rigged Unity humanoid `.fbx` ready to drop into a scene. If the **VRChat SDK** is detected in the project, it additionally wraps the avatar in a prefab with a `VRCAvatarDescriptor` and instantiates it into the open scene so it's immediately uploadable as a VRChat avatar.
+
+### 1. Export the avatar from Rec Room
+
+In the Rec Room game client, export your avatar **as an A-pose**. The converter expects the rest pose to be the Rec Room A-pose; T-pose or other rest poses will not rig correctly.
+
+### 2. Convert the avatar
+
+1. Open **Rec Room Exporter > Convert Avatar**.
+2. Set the **Avatar GLB (A-Pose)** to the `.glb` exported from the game client.
+3. Click **Convert Avatar**.
+
+The converter will run Blender in the background to rig the mesh, optionally rotate the rest pose to T-pose, and write a Unity-humanoid `.fbx` next to the source `.glb`. In a VRChat project the resulting prefab is also instantiated into the active scene.
+
+### Additional settings
+
+The remaining fields in the window generally don't need to be adjusted — the defaults handle every Rec Room avatar variant the converter supports:
+
+- **Watch Hand** — picks which wrist the watch goes on (off-hand watches are deleted). Appears only on full body avatars, as bean avatars do not include watches
+- **Rigid Meshes** — toggle on individual items if you'd like them to remain as rigid objects and not bend with the avatar. Turn everything on for the classic bean look.
+- **Merge Skinned Meshes** *(on)* — joins every skinned mesh into one renderer to improve performance in realtime applications, such as VRChat.
+- **Enforce T-Pose** *(on)* — rotates the rest pose to T-pose so Unity humanoid muscle space (and the VRChat SDK) calibrates correctly.
+
 ## Exporting a Room from Rec Room Studio
 
 ### 1. Install the package
