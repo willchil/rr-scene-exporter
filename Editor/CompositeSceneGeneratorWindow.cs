@@ -7,6 +7,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using RecRoom.Core.Studio;
 using RecRoom.Protobuf;
+using RRSceneExporter;
 using Debug = UnityEngine.Debug;
 
 namespace CompositeSceneGenerator
@@ -75,7 +76,7 @@ namespace CompositeSceneGenerator
                 builtInRegistry, typeof(RecRoomBuiltInObjectData), false);
 
             if (string.IsNullOrEmpty(blenderPath))
-                blenderPath = BlenderConverter.FindBlenderPath() ?? "";
+                blenderPath = BlenderLocator.FindBlenderPath() ?? "";
 
             EditorGUILayout.BeginHorizontal();
             blenderPath = EditorGUILayout.TextField(
@@ -140,7 +141,7 @@ namespace CompositeSceneGenerator
                     if (GUILayout.Button("Download Blender"))
                         Application.OpenURL("https://www.blender.org/download/");
                     if (GUILayout.Button("Check for installation"))
-                        blenderPath = BlenderConverter.FindBlenderPath() ?? "";
+                        blenderPath = BlenderLocator.FindBlenderPath() ?? "";
                     EditorGUILayout.EndHorizontal();
                     valid = false;
                 }

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using RRSceneExporter;
 
 namespace RRSceneExporter.RRAvatar
 {
@@ -44,7 +45,7 @@ namespace RRSceneExporter.RRAvatar
         private void OnEnable()
         {
             if (string.IsNullOrEmpty(blenderPath))
-                blenderPath = AvatarConverter.FindBlenderPath() ?? "";
+                blenderPath = BlenderLocator.FindBlenderPath() ?? "";
 
             if (glbAsset == null)
                 glbAsset = FindDefaultAvatarGlb();
@@ -176,7 +177,7 @@ namespace RRSceneExporter.RRAvatar
                 if (GUILayout.Button("Download Blender"))
                     Application.OpenURL("https://www.blender.org/download/");
                 if (GUILayout.Button("Check for installation"))
-                    blenderPath = AvatarConverter.FindBlenderPath() ?? "";
+                    blenderPath = BlenderLocator.FindBlenderPath() ?? "";
                 EditorGUILayout.EndHorizontal();
                 valid = false;
             }

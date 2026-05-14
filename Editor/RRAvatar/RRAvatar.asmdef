@@ -1,7 +1,9 @@
 {
     "name": "willchil.RRSceneExporter.RRAvatar",
     "rootNamespace": "RRSceneExporter.RRAvatar",
-    "references": [],
+    "references": [
+        "willchil.RRSceneExporter.Common"
+    ],
     "precompiledReferences": [],
     "autoReferenced": true,
     "allowUnsafeCode": false,

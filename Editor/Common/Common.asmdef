@@ -1,0 +1,16 @@
+{
+    "name": "willchil.RRSceneExporter.Common",
+    "rootNamespace": "RRSceneExporter",
+    "references": [],
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "allowUnsafeCode": false,
+    "noEngineReferences": false,
+    "overrideReferences": false,
+    "defineConstraints": [],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "rootNamespaceDefaultVisibility": "Public"
+}

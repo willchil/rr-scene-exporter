@@ -3,7 +3,8 @@
     "rootNamespace": "RRSceneExporter",
     "references": [
         "RecRoom.Studio.Common.Runtime",
-        "willchil.RRSceneExporter.Generated"
+        "willchil.RRSceneExporter.Generated",
+        "willchil.RRSceneExporter.Common"
     ],
     "precompiledReferences": [
         "Google.Protobuf.dll",

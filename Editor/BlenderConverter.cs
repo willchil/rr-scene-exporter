@@ -3,87 +3,17 @@ using System.Diagnostics;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
+using RRSceneExporter;
 using Debug = UnityEngine.Debug;
 
 namespace CompositeSceneGenerator
 {
     /// <summary>
-    /// Finds Blender on the system and converts GLB files to FBX with correct material tints.
+    /// Converts GLB files to FBX with correct material tints by invoking
+    /// Blender headlessly. Blender path discovery lives in <see cref="BlenderLocator"/>.
     /// </summary>
     public static class BlenderConverter
     {
-        /// <summary>
-        /// Auto-detect the Blender executable path.
-        /// </summary>
-        public static string FindBlenderPath()
-        {
-            // Check common Windows install locations
-            string[] candidates = new[]
-            {
-                // Steam
-                @"C:\Program Files (x86)\Steam\steamapps\common\Blender\blender.exe",
-                // Blender Foundation default installs (scan for latest version)
-                null, // placeholder — scanned below
-                // winget / Microsoft Store
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    @"Programs\Blender Foundation\Blender\blender.exe"),
-            };
-
-            // Check explicit paths first
-            foreach (string path in candidates)
-            {
-                if (path != null && File.Exists(path))
-                    return path;
-            }
-
-            // Scan Blender Foundation folders for versioned installs (e.g. "Blender 4.2")
-            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            string blenderFoundation = Path.Combine(programFiles, "Blender Foundation");
-            if (Directory.Exists(blenderFoundation))
-            {
-                // Sort descending to prefer the latest version
-                string[] dirs = Directory.GetDirectories(blenderFoundation);
-                Array.Sort(dirs);
-                Array.Reverse(dirs);
-                foreach (string dir in dirs)
-                {
-                    string exe = Path.Combine(dir, "blender.exe");
-                    if (File.Exists(exe))
-                        return exe;
-                }
-            }
-
-            // Try PATH
-            try
-            {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "where",
-                    Arguments = "blender",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using (var proc = Process.Start(psi))
-                {
-                    string output = proc.StandardOutput.ReadToEnd().Trim();
-                    proc.WaitForExit();
-                    if (proc.ExitCode == 0 && !string.IsNullOrEmpty(output))
-                    {
-                        string firstLine = output.Split('\n')[0].Trim();
-                        if (File.Exists(firstLine))
-                            return firstLine;
-                    }
-                }
-            }
-            catch
-            {
-                // Ignore — where.exe might not be available
-            }
-
-            return null;
-        }
-
         /// <summary>
         /// Convert a GLB file to FBX using Blender in headless mode, with material tint baking.
         /// </summary>

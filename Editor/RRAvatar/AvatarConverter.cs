@@ -15,66 +15,6 @@ namespace RRSceneExporter.RRAvatar
     {
         private const string PackageRoot = "Packages/com.willchil.rr-scene-exporter/Editor/RRAvatar";
 
-        /// <summary>Auto-detect the Blender executable path on Windows.</summary>
-        public static string FindBlenderPath()
-        {
-            string[] candidates =
-            {
-                @"C:\Program Files (x86)\Steam\steamapps\common\Blender\blender.exe",
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    @"Programs\Blender Foundation\Blender\blender.exe"),
-            };
-            foreach (string p in candidates)
-            {
-                if (!string.IsNullOrEmpty(p) && File.Exists(p))
-                    return p;
-            }
-
-            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            string foundation = Path.Combine(programFiles, "Blender Foundation");
-            if (Directory.Exists(foundation))
-            {
-                string[] dirs = Directory.GetDirectories(foundation);
-                Array.Sort(dirs);
-                Array.Reverse(dirs);
-                foreach (string dir in dirs)
-                {
-                    string exe = Path.Combine(dir, "blender.exe");
-                    if (File.Exists(exe))
-                        return exe;
-                }
-            }
-
-            try
-            {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "where",
-                    Arguments = "blender",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
-                using (var proc = Process.Start(psi))
-                {
-                    string output = proc.StandardOutput.ReadToEnd().Trim();
-                    proc.WaitForExit();
-                    if (proc.ExitCode == 0 && !string.IsNullOrEmpty(output))
-                    {
-                        string firstLine = output.Split('\n')[0].Trim();
-                        if (File.Exists(firstLine))
-                            return firstLine;
-                    }
-                }
-            }
-            catch
-            {
-                // where.exe might not be available
-            }
-
-            return null;
-        }
-
         /// <summary>
         /// Run Blender headlessly to import <paramref name="glbPath"/> into rigged_reference.blend,
         /// transfer weights, and write the rigged result to <paramref name="fbxPath"/>.
