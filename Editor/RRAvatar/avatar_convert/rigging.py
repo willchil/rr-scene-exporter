@@ -71,6 +71,92 @@ def transfer_weights(target, source, armature=None):
         bpy.ops.object.vertex_group_normalize_all(lock_active=False)
 
 
+def clean_bean_finger_weights(target):
+    """Bean (legless) avatars have a four-digit hand: a thumb, an index
+    finger, and a single "mitten" digit that stands in for the middle,
+    ring, and pinky fingers. The MB donor only paints the mitten with
+    ``Middle{n}`` weight (no Ring or Pinky), so the mitten responds to
+    a single Unity humanoid finger muscle (Middle) instead of moving as
+    the average of all three.
+
+    This pass leaves the index/mitten classification of weights alone
+    and only redistributes mitten weight: for every vertex with any
+    ``Middle{n}`` weight on either side, split that weight equally
+    across ``Middle{n}``, ``Ring{n}``, ``Pinky{n}`` (creating the
+    Ring/Pinky vertex groups on the target if the donor lacked them).
+    Linear blend skinning with equal weights on those bones evaluates
+    to the average of their three transforms, so the mitten moves as
+    the mean of the three Unity humanoid fingers driving it.
+    """
+    name_to_idx = {vg.name: vg.index for vg in target.vertex_groups}
+
+    def _ensure_group(bone_name):
+        if bone_name not in name_to_idx:
+            vg = target.vertex_groups.new(name=bone_name)
+            name_to_idx[bone_name] = vg.index
+        return target.vertex_groups[name_to_idx[bone_name]]
+
+    mesh = target.data
+
+    for side in ('L', 'R'):
+        mitten_per_joint = [
+            [f"Jnt.Hand.Middle{n}.{side}",
+             f"Jnt.Hand.Ring{n}.{side}",
+             f"Jnt.Hand.Pinky{n}.{side}"]
+            for n in (1, 2, 3)
+        ]
+
+        # The donor only supplies Middle weight, so use that to detect
+        # whether this side has any mitten weighting at all.
+        middle_present = any(
+            f"Jnt.Hand.Middle{n}.{side}" in name_to_idx for n in (1, 2, 3)
+        )
+        if not middle_present:
+            continue
+
+        # Make sure every Ring/Pinky bone has a vertex group on the
+        # target so the equal three-way split has somewhere to write to.
+        for joint in mitten_per_joint:
+            for bone in joint:
+                _ensure_group(bone)
+        mitten_idx_per_joint = [
+            [name_to_idx[b] for b in joint] for joint in mitten_per_joint
+        ]
+
+        # Per joint segment, the source group (Middle{n}) is also the
+        # first entry of the destination joint -- so reading current
+        # weights from the source and overwriting all three entries with
+        # the equal share is safe.
+        n_verts = 0
+        for v in mesh.vertices:
+            touched = False
+            for jn in (1, 2, 3):
+                source_idx = name_to_idx.get(f"Jnt.Hand.Middle{jn}.{side}")
+                if source_idx is None:
+                    continue
+                middle_w = 0.0
+                for g in v.groups:
+                    if g.group == source_idx:
+                        middle_w = g.weight
+                        break
+                if middle_w <= 0.0:
+                    continue
+                share = middle_w / 3.0
+                for gi in mitten_idx_per_joint[jn - 1]:
+                    target.vertex_groups[gi].add([v.index], share, 'REPLACE')
+                touched = True
+            if touched:
+                n_verts += 1
+
+        if n_verts:
+            print(f"    bean hand {side}: averaged mitten weight across "
+                  f"Middle/Ring/Pinky on {n_verts} verts of {target.name}")
+
+    select_only(target)
+    if target.vertex_groups:
+        bpy.ops.object.vertex_group_normalize_all(lock_active=False)
+
+
 def rigid_bind(target, armature):
     """Bind every vertex of ``target`` to the single deform bone whose head is
     closest to the mesh's world-space bounding-box center. Keeps the mesh rigid
@@ -121,6 +207,8 @@ def rig_meshes(avatar_root, armature, rigid_names, bean=False):
                 print(f"  WARNING: no weight donor found for {tgt.name}; leaving unrigged")
             else:
                 transfer_weights(tgt, src, armature=armature)
+                if bean:
+                    clean_bean_finger_weights(tgt)
                 print(f"  {tgt.name}: weights from {src.name} ({len(tgt.vertex_groups)} groups)")
 
         for m in list(tgt.modifiers):
