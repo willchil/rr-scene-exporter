@@ -314,11 +314,84 @@ namespace RRSceneExporter.RRAvatar
                 Selection.activeObject = imported;
             }
 
+#if HAS_VRCHAT_SDK
+            // In a VRChat project, immediately wrap the FBX in a prefab with
+            // the avatar descriptor attached and drop it in the active scene
+            // so the user can start editing/uploading without manual setup.
+            CreateVRChatAvatarPrefab(fbxAssetPath);
+#endif
+
             EditorUtility.DisplayDialog(
                 "Convert Avatar",
                 $"Avatar exported to:\n{fbxAssetPath}",
                 "OK");
         }
+
+#if HAS_VRCHAT_SDK
+        /// <summary>
+        /// Create a prefab next to ``fbxAssetPath`` (same base name, ``.prefab``
+        /// extension) that wraps the imported FBX with a fresh
+        /// ``VRCAvatarDescriptor`` component, then instantiate that prefab into
+        /// the currently open scene at the world origin so the user can start
+        /// configuring it immediately. If a prefab already exists at the target
+        /// path it's overwritten.
+        /// </summary>
+        private static void CreateVRChatAvatarPrefab(string fbxAssetPath)
+        {
+            var fbxRoot = AssetDatabase.LoadAssetAtPath<GameObject>(fbxAssetPath);
+            if (fbxRoot == null)
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[ConvertAvatar] Could not load imported FBX at '{fbxAssetPath}' to build a VRChat prefab.");
+                return;
+            }
+
+            string prefabAssetPath = Path.ChangeExtension(fbxAssetPath, ".prefab");
+
+            // Instantiate the FBX into a temporary scene object so we can
+            // attach the descriptor before serialising the prefab. Saving
+            // happens immediately and the temp instance is destroyed; a
+            // separate fresh instance is then dropped into the active scene
+            // for the user to interact with.
+            var temp = (GameObject)PrefabUtility.InstantiatePrefab(fbxRoot);
+            if (temp == null)
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[ConvertAvatar] Could not instantiate FBX '{fbxAssetPath}' for prefab creation.");
+                return;
+            }
+            try
+            {
+                if (temp.GetComponent<VRC.SDK3.Avatars.Components.VRCAvatarDescriptor>() == null)
+                    temp.AddComponent<VRC.SDK3.Avatars.Components.VRCAvatarDescriptor>();
+
+                PrefabUtility.SaveAsPrefabAssetAndConnect(
+                    temp, prefabAssetPath, InteractionMode.AutomatedAction);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(temp);
+            }
+
+            var prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(prefabAssetPath);
+            if (prefabAsset == null)
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[ConvertAvatar] Prefab was not created at '{prefabAssetPath}'.");
+                return;
+            }
+
+            var sceneInstance = (GameObject)PrefabUtility.InstantiatePrefab(prefabAsset);
+            if (sceneInstance != null)
+            {
+                sceneInstance.transform.position = Vector3.zero;
+                sceneInstance.transform.rotation = Quaternion.identity;
+                Undo.RegisterCreatedObjectUndo(sceneInstance, "Convert Avatar");
+                Selection.activeGameObject = sceneInstance;
+                EditorGUIUtility.PingObject(sceneInstance);
+            }
+        }
+#endif
 
         // ----- Rigid-mesh scan ---------------------------------------------------
 
@@ -575,8 +648,13 @@ namespace RRSceneExporter.RRAvatar
         private static bool IsSkinMaterialName(string name)
         {
             if (string.IsNullOrEmpty(name)) return false;
+            // ``skinMeshNames`` disqualifies a mesh from the rigid-mesh list,
+            // so anything that should never be rigid (the body skin or the
+            // face mesh -- the latter has shape keys driving expressions and
+            // must stay weighted to the head bone) belongs here.
             return name.StartsWith("Skin_Mat", StringComparison.Ordinal) ||
-                   name.StartsWith("Skin_Gradients_Mat", StringComparison.Ordinal);
+                   name.StartsWith("Skin_Gradients_Mat", StringComparison.Ordinal) ||
+                   name.IndexOf("AvatarFace", StringComparison.Ordinal) >= 0;
         }
 
         /// <summary>

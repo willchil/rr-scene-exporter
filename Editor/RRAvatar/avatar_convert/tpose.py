@@ -1,14 +1,147 @@
 """Convert the source rig's A-pose rest into a humanoid T-pose.
 
-Done as a pure rest-pose change (edit-bone + weighted vertex transform)
-because ``bpy.ops.object.modifier_apply`` refuses to run on meshes that have
-shape keys, which the Rec Room face mesh always does.
+Each bone's target world orientation is taken from a reference Rec Room
+avatar that has been run through Unity's "Enforce T-Pose" button (saved
+out as ``Avatar_Skeleton.prefab``). The Unity prefab's per-bone local
+rotations are composed into Unity-world rotations (with the chest
+treated as identity, which holds for any properly upright humanoid in
+T-pose), Unity's local +Y bone axis is rotated through to obtain the
+world tail direction, and that direction is converted into Blender's
+coordinate frame and fed bone-by-bone into :func:`_force_tpose_arm`,
+which applies the rotation as a pure rest-pose change and carries the
+mesh + shape keys along by weighted skinning.
+
+Done as a rest-pose change (edit-bone + weighted vertex transform)
+because ``bpy.ops.object.modifier_apply`` refuses to run on meshes that
+have shape keys, which the Rec Room face mesh always does.
 """
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Quaternion, Vector
 
 from .utils import select_only
+
+
+# Per-bone local rotations from a Unity humanoid avatar after pressing
+# "Enforce T-Pose" in the Rig inspector. Stored as Blender quaternions
+# (``Quaternion((w, x, y, z))``) for ergonomic composition; the source
+# values are Unity ``(x, y, z, w)`` quaternions read straight from the
+# prefab YAML.
+def _q(x, y, z, w):
+    return Quaternion((w, x, y, z))
+
+
+# Each entry: bone -> (parent-bone-or-None, local-rotation-quat). Parent
+# of ``None`` means "compose from world identity" (i.e. the bone's
+# ancestor chain above this point is assumed upright). Shoulder is
+# included so its contribution to UpperArm's world rotation is captured,
+# but Shoulder itself is *not* in the update list -- the Rec Room rig's
+# shoulder is already correct in A-pose, and rewriting it would shift
+# the arm root sideways.
+_UNITY_TPOSE = {
+    # Left side -----------------------------------------------------------
+    "Jnt.Shoulder.L":      (None,                  _q(-0.016470691, 0.008238867, -0.70764357, 0.7063295)),
+    "Jnt.UpperArm.L":      ("Jnt.Shoulder.L",      _q(0.017935008, -0.020285366, -0.023550447, 0.9993559)),
+    "Jnt.LowerArm.L":      ("Jnt.UpperArm.L",      _q(-0.037070952, 0.0009058099, 0.008189214, 0.9992787)),
+    "Jnt.Hand.L":          ("Jnt.LowerArm.L",      _q(0.028521225, 0.0021384284, 0.0020113466, 0.9995889)),
+    "Jnt.Hand.PalmCup.L":  ("Jnt.Hand.L",          _q(0.14998166, -0.36801282, -0.050032724, 0.91627985)),
+    "Jnt.Hand.Thumb1.L":   ("Jnt.Hand.L",          _q(0.086092845, 0.9268821, -0.34460896, -0.121335834)),
+    "Jnt.Hand.Thumb2.L":   ("Jnt.Hand.Thumb1.L",   _q(-0.027821762, -0.009157237, -0.019018158, 0.99939007)),
+    "Jnt.Hand.Thumb3.L":   ("Jnt.Hand.Thumb2.L",   _q(0.036700882, -0.0114988675, 0.0070044138, 0.99923563)),
+    "Jnt.Hand.Index1.L":   ("Jnt.Hand.L",          _q(-0.032732654, -0.7167498, -0.0046872115, 0.696546)),
+    "Jnt.Hand.Index2.L":   ("Jnt.Hand.Index1.L",   _q(-0.032750335, -0.028910723, -0.00017565115, 0.9990454)),
+    "Jnt.Hand.Index3.L":   ("Jnt.Hand.Index2.L",   _q(-0.083374664, -0.0064752656, 0.006052037, 0.99647886)),
+    "Jnt.Hand.Middle1.L":  ("Jnt.Hand.L",          _q(-0.025620677, -0.71195036, -0.028919961, 0.7011661)),
+    "Jnt.Hand.Middle2.L":  ("Jnt.Hand.Middle1.L",  _q(-0.035435125, -0.023255402, -2.1265814e-05, 0.9991014)),
+    "Jnt.Hand.Middle3.L":  ("Jnt.Hand.Middle2.L",  _q(-0.1218577, 0.0050440333, 0.0032211929, 0.9925296)),
+    "Jnt.Hand.Ring1.L":    ("Jnt.Hand.L",          _q(-0.008290451, -0.6606433, -0.040058766, 0.74958456)),
+    "Jnt.Hand.Ring2.L":    ("Jnt.Hand.Ring1.L",    _q(-0.034833908, 0.0008356868, -0.001722736, 0.9993913)),
+    "Jnt.Hand.Ring3.L":    ("Jnt.Hand.Ring2.L",    _q(-0.15707459, -0.014415814, -0.0027186016, 0.9874778)),
+    "Jnt.Hand.Pinky1.L":   ("Jnt.Hand.PalmCup.L",  _q(-0.074653596, -0.23051965, 0.07255431, 0.9674831)),
+    "Jnt.Hand.Pinky2.L":   ("Jnt.Hand.Pinky1.L",   _q(-0.032221537, -0.010016466, 0.0019482549, 0.99942875)),
+    "Jnt.Hand.Pinky3.L":   ("Jnt.Hand.Pinky2.L",   _q(-0.14490606, -0.0071131526, -0.002072785, 0.9894177)),
+
+    # Right side ----------------------------------------------------------
+    "Jnt.Shoulder.R":      (None,                  _q(-0.016470967, -0.008239146, 0.70764357, 0.7063295)),
+    "Jnt.UpperArm.R":      ("Jnt.Shoulder.R",      _q(0.017935041, 0.020285398, 0.023550447, 0.9993559)),
+    "Jnt.LowerArm.R":      ("Jnt.UpperArm.R",      _q(-0.037071243, -0.0009057167, -0.008189261, 0.9992787)),
+    "Jnt.Hand.R":          ("Jnt.LowerArm.R",      _q(0.028521234, -0.0021384314, -0.002011287, 0.9995889)),
+    "Jnt.Hand.PalmCup.R":  ("Jnt.Hand.R",          _q(0.14998162, 0.3680128, 0.05003268, 0.9162799)),
+    "Jnt.Hand.Thumb1.R":   ("Jnt.Hand.R",          _q(-0.08609306, 0.92688173, -0.34461, 0.12133505)),
+    "Jnt.Hand.Thumb2.R":   ("Jnt.Hand.Thumb1.R",   _q(-0.027824994, 0.009158066, 0.019018687, 0.99938995)),
+    "Jnt.Hand.Thumb3.R":   ("Jnt.Hand.Thumb2.R",   _q(0.036700875, 0.011498862, -0.0070044207, 0.99923563)),
+    "Jnt.Hand.Index1.R":   ("Jnt.Hand.R",          _q(-0.032732613, 0.7167498, 0.004687169, 0.696546)),
+    "Jnt.Hand.Index2.R":   ("Jnt.Hand.Index1.R",   _q(-0.03274752, 0.02891066, 0.00017586719, 0.99904543)),
+    "Jnt.Hand.Index3.R":   ("Jnt.Hand.Index2.R",   _q(-0.08337469, 0.00647526, -0.0060520517, 0.99647886)),
+    "Jnt.Hand.Middle1.R":  ("Jnt.Hand.R",          _q(-0.025618438, 0.7119506, 0.028917044, 0.70116615)),
+    "Jnt.Hand.Middle2.R":  ("Jnt.Hand.Middle1.R",  _q(-0.035439707, 0.023255581, 2.1353359e-05, 0.9991012)),
+    "Jnt.Hand.Middle3.R":  ("Jnt.Hand.Middle2.R",  _q(-0.121857665, -0.005044027, -0.0032211945, 0.9925296)),
+    "Jnt.Hand.Ring1.R":    ("Jnt.Hand.R",          _q(-0.008290685, 0.6606432, 0.04005965, 0.74958456)),
+    "Jnt.Hand.Ring2.R":    ("Jnt.Hand.Ring1.R",    _q(-0.034834072, -0.0008354783, 0.0017228764, 0.9993913)),
+    "Jnt.Hand.Ring3.R":    ("Jnt.Hand.Ring2.R",    _q(-0.15707456, 0.014415807, 0.0027186028, 0.9874778)),
+    "Jnt.Hand.Pinky1.R":   ("Jnt.Hand.PalmCup.R",  _q(-0.0746531, 0.23051944, -0.07255544, 0.96748304)),
+    "Jnt.Hand.Pinky2.R":   ("Jnt.Hand.Pinky1.R",   _q(-0.032214664, 0.010016692, -0.001951571, 0.9994289)),
+    "Jnt.Hand.Pinky3.R":   ("Jnt.Hand.Pinky2.R",   _q(-0.14490609, 0.0071131433, 0.00207278, 0.9894177)),
+}
+
+# Bones to actually realign in Blender, parent-first per side. Shoulder
+# is intentionally omitted (we use its quaternion only to compose
+# UpperArm's world rotation). Order matters: each call rotates the
+# bone's entire subtree rigidly, so children get re-aligned by their own
+# entry later in the list.
+_TPOSE_UPDATE_ORDER = [
+    "Jnt.UpperArm.L", "Jnt.LowerArm.L", "Jnt.Hand.L", "Jnt.Hand.PalmCup.L",
+    "Jnt.Hand.Thumb1.L", "Jnt.Hand.Thumb2.L", "Jnt.Hand.Thumb3.L",
+    "Jnt.Hand.Index1.L", "Jnt.Hand.Index2.L", "Jnt.Hand.Index3.L",
+    "Jnt.Hand.Middle1.L", "Jnt.Hand.Middle2.L", "Jnt.Hand.Middle3.L",
+    "Jnt.Hand.Ring1.L", "Jnt.Hand.Ring2.L", "Jnt.Hand.Ring3.L",
+    "Jnt.Hand.Pinky1.L", "Jnt.Hand.Pinky2.L", "Jnt.Hand.Pinky3.L",
+
+    "Jnt.UpperArm.R", "Jnt.LowerArm.R", "Jnt.Hand.R", "Jnt.Hand.PalmCup.R",
+    "Jnt.Hand.Thumb1.R", "Jnt.Hand.Thumb2.R", "Jnt.Hand.Thumb3.R",
+    "Jnt.Hand.Index1.R", "Jnt.Hand.Index2.R", "Jnt.Hand.Index3.R",
+    "Jnt.Hand.Middle1.R", "Jnt.Hand.Middle2.R", "Jnt.Hand.Middle3.R",
+    "Jnt.Hand.Ring1.R", "Jnt.Hand.Ring2.R", "Jnt.Hand.Ring3.R",
+    "Jnt.Hand.Pinky1.R", "Jnt.Hand.Pinky2.R", "Jnt.Hand.Pinky3.R",
+]
+
+
+def _unity_world_rotation(bone_name):
+    """Compose ``bone_name``'s Unity-world rotation by walking parent
+    pointers up to the root of the recorded chain (where parent is
+    ``None``, meaning "the chest is identity"). Returns a Blender
+    ``Quaternion``.
+    """
+    chain = []
+    cur = bone_name
+    while cur is not None:
+        parent, _ = _UNITY_TPOSE[cur]
+        chain.append(cur)
+        cur = parent
+    chain.reverse()
+    world = Quaternion((1.0, 0.0, 0.0, 0.0))
+    for name in chain:
+        _, local = _UNITY_TPOSE[name]
+        world = world @ local
+    return world
+
+
+def _unity_to_blender_dir(v):
+    """Convert a Unity-world direction (left-handed, Y-up) to a
+    Blender-world direction (right-handed, Z-up) for an avatar that
+    stands upright in both apps with avatar-left along world +X. The
+    handedness flip is absorbed by the y/z axis swap.
+    """
+    return Vector((v.x, v.z, v.y))
+
+
+def _world_tail_dir_blender(bone_name):
+    """Return the Blender-world direction the bone's tail should point
+    in T-pose. Unity humanoid bones point along their local +Y axis, so
+    we rotate ``(0, 1, 0)`` by the bone's composed Unity-world rotation
+    and convert into Blender's frame.
+    """
+    return _unity_to_blender_dir(_unity_world_rotation(bone_name) @ Vector((0.0, 1.0, 0.0)))
 
 
 def _force_tpose_arm(armature, meshes, root_bone_name, target_dir_world):
@@ -131,59 +264,20 @@ def _force_tpose_arm(armature, meshes, root_bone_name, target_dir_world):
                         p.co = _xform(p.co, w)
 
 
-def _straighten_subtree(armature, meshes, root_bone_name, target_dir_world):
-    """Recursively re-align every bone in the subtree of ``root_bone_name``
-    so that each bone individually points along ``target_dir_world``.
-
-    The shoulder-level pass in ``_force_tpose_arm`` rotates the whole arm
-    chain rigidly, which preserves the source A-pose's relative finger curl.
-    Walking the subtree parent-first and re-aligning each bone in turn
-    flattens that curl: every joint ends up pointing along the arm axis,
-    matching what Unity's "Enforce T-Pose" produces.
-
-    Thumb bones are deliberately excluded: Unity's T-pose convention has the
-    thumb sticking out from the palm at roughly 30 degrees, and the source
-    A-pose's thumb-vs-hand orientation already matches that closely once the
-    arm is rotated rigidly. Straightening thumbs to the arm axis tucks them
-    under the index finger, which reads as a balled fist in VRChat.
-    """
-    root = armature.data.bones.get(root_bone_name)
-    if root is None:
-        return
-    # Collect names BFS-style (parent before child) up front, because each
-    # _force_tpose_arm call enters/exits edit mode and rebuilds ``bones``.
-    # Skip any bone whose name contains "Thumb" (and its subtree) -- the
-    # thumb keeps its A-pose-relative angle on purpose.
-    names = []
-    queue = [root]
-    while queue:
-        b = queue.pop(0)
-        if "Thumb" in b.name:
-            continue
-        names.append(b.name)
-        queue.extend(b.children)
-    for name in names:
-        _force_tpose_arm(armature, meshes, name, target_dir_world)
-
-
 def force_tpose(armature, meshes):
     """Convert the rig's rest pose from Rec Room A-pose to humanoid T-pose.
 
     Unity humanoid (and the VRChat SDK in particular) calibrates muscle
     space relative to T-pose, so an A-pose rest causes shipped animations
-    (claps, dances, etc.) to drive arms tucked into the torso. Rotating each
-    upper-arm subtree so the arm points along world +/-X fixes this and
-    matches what the importer's "Enforce T-Pose" button would do, but baked
-    into the FBX itself so every consumer (humanoid, generic, raw skeleton)
-    sees a consistent rest pose.
-
-    After the shoulder-level rotation, the hand subtree is re-straightened
-    bone-by-bone so the source A-pose's relaxed finger curl (which would
-    otherwise survive the rigid arm rotation) is flattened along the arm
-    axis. Without this fingers ship slightly curled and read as a balled
-    fist in VRChat's shipped animations.
+    (claps, dances, etc.) to drive arms tucked into the torso. Each bone
+    in the arm subtree (UpperArm down through the fingers, both sides)
+    is rotated so its tail points along the Unity-world direction it
+    would have after pressing "Enforce T-Pose" in the avatar's Rig
+    inspector. Walking the chain parent-first means each bone's
+    direction is applied on top of its parent's already-corrected
+    orientation, naturally preserving Unity's finger spread and the
+    canonical thumb angle that VRChat expects.
     """
-    _force_tpose_arm(armature, meshes, "Jnt.UpperArm.L", Vector(( 1.0, 0.0, 0.0)))
-    _straighten_subtree(armature, meshes, "Jnt.Hand.L", Vector(( 1.0, 0.0, 0.0)))
-    _force_tpose_arm(armature, meshes, "Jnt.UpperArm.R", Vector((-1.0, 0.0, 0.0)))
-    _straighten_subtree(armature, meshes, "Jnt.Hand.R", Vector((-1.0, 0.0, 0.0)))
+    for bone_name in _TPOSE_UPDATE_ORDER:
+        target = _world_tail_dir_blender(bone_name)
+        _force_tpose_arm(armature, meshes, bone_name, target)
