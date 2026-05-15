@@ -46,6 +46,8 @@ namespace RRSceneExporter.RRAvatar
         {
             if (string.IsNullOrEmpty(blenderPath))
                 blenderPath = BlenderLocator.FindBlenderPath() ?? "";
+            else
+                blenderPath = BlenderLocator.NormalizeBlenderPath(blenderPath);
 
             if (glbAsset == null)
                 glbAsset = FindDefaultAvatarGlb();
@@ -81,13 +83,17 @@ namespace RRSceneExporter.RRAvatar
 
             EditorGUILayout.BeginHorizontal();
             blenderPath = EditorGUILayout.TextField(
-                new GUIContent("Blender Path", "Path to blender.exe. Auto-detected from common install locations."),
+                new GUIContent("Blender Path", "Path to the Blender executable. Auto-detected from common install locations."),
                 blenderPath);
             if (GUILayout.Button("Browse", GUILayout.Width(60)))
             {
+#if UNITY_EDITOR_OSX
+                string selected = EditorUtility.OpenFilePanel("Select Blender Executable", "/Applications", "");
+#else
                 string selected = EditorUtility.OpenFilePanel("Select Blender Executable", "", "exe");
+#endif
                 if (!string.IsNullOrEmpty(selected))
-                    blenderPath = selected;
+                    blenderPath = BlenderLocator.NormalizeBlenderPath(selected);
             }
             EditorGUILayout.EndHorizontal();
 

@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace RRSceneExporter
 {
     /// <summary>
-    /// Locates the Blender executable on Windows. Collects every install
+    /// Locates the Blender executable on Windows and macOS. Collects every install
     /// we can find (Steam, per-user Programs, system Program Files, PATH
     /// lookup), queries each one's <c>--version</c>, and returns the
     /// newest. We deliberately do not return the first candidate that
@@ -21,6 +21,7 @@ namespace RRSceneExporter
         {
             var candidates = new List<string>();
 
+#if UNITY_EDITOR_WIN
             // Steam installs (unversioned single directory).
             candidates.Add(@"C:\Program Files (x86)\Steam\steamapps\common\Blender\blender.exe");
             candidates.Add(@"C:\Program Files\Steam\steamapps\common\Blender\blender.exe");
@@ -51,6 +52,22 @@ namespace RRSceneExporter
                         candidates.Add(exe);
                 }
             }
+#elif UNITY_EDITOR_OSX
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            foreach (string root in new[] { "/Applications", Path.Combine(home, "Applications") })
+            {
+                if (!Directory.Exists(root))
+                    continue;
+                try
+                {
+                    foreach (string app in Directory.GetDirectories(root, "Blender*.app"))
+                        candidates.Add(Path.Combine(app, "Contents/MacOS/Blender"));
+                }
+                catch { }
+            }
+            candidates.Add(Path.Combine(home,
+                "Library/Application Support/Steam/steamapps/common/Blender/Blender.app/Contents/MacOS/Blender"));
+#endif
 
             // Anything resolvable via PATH (scoop, chocolatey, manual symlinks, ...).
             candidates.AddRange(WhereBlender());
@@ -93,6 +110,19 @@ namespace RRSceneExporter
             return best ?? existing[0];
         }
 
+        public static string NormalizeBlenderPath(string path)
+        {
+#if UNITY_EDITOR_OSX
+            if (!string.IsNullOrEmpty(path) && path.EndsWith(".app", StringComparison.OrdinalIgnoreCase))
+            {
+                string inner = Path.Combine(path, "Contents/MacOS/Blender");
+                if (File.Exists(inner))
+                    return inner;
+            }
+#endif
+            return path;
+        }
+
         private static IEnumerable<string> WhereBlender()
         {
             string output = null;
@@ -100,7 +130,11 @@ namespace RRSceneExporter
             {
                 var psi = new ProcessStartInfo
                 {
+#if UNITY_EDITOR_WIN
                     FileName = "where",
+#else
+                    FileName = "/usr/bin/which",
+#endif
                     Arguments = "blender",
                     RedirectStandardOutput = true,
                     UseShellExecute = false,
