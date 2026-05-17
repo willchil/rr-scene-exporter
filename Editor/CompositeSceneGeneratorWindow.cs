@@ -305,9 +305,10 @@ namespace CompositeSceneGenerator
                 // 5. Build prefab lookup from registry
                 EditorUtility.DisplayProgressBar("Generating Composite Scene", "Building prefab lookup...", 0.3f);
                 var prefabLookup = PrefabResolver.BuildPrefabLookup(builtInRegistry);
+                var sceneTransforms = new Dictionary<Guid, SceneObjectInfo>();
 
                 if (recRoomObjectsScene != null)
-                    PrefabResolver.AddStudioObjectPrefabs(prefabLookup, AssetDatabase.GetAssetPath(recRoomObjectsScene));
+                    PrefabResolver.AddStudioObjectPrefabs(prefabLookup, AssetDatabase.GetAssetPath(recRoomObjectsScene), sceneTransforms);
 
                 var usedGuids = DependencyCache.CollectUsedPrefabGuids(persistedRoom);
                 DependencyCache.CachePackageDependencies(prefabLookup, usedGuids);
@@ -332,13 +333,14 @@ namespace CompositeSceneGenerator
                 }
 
                 var placedViewIds = new HashSet<string>();
+                var placedInstances = new Dictionary<Guid, GameObject>();
                 if (persistedRoom.ConnectableGraphData?.RootNode != null)
                 {
                     ObjectPlacer.PlaceConnectableNode(
                         persistedRoom.ConnectableGraphData.RootNode,
                         objectRoot.transform,
                         viewById, prefabLookup, scene,
-                        placedViewIds, ref placed, ref skipped);
+                        placedViewIds, ref placed, ref skipped, sceneTransforms, placedInstances);
                 }
 
                 for (int i = 0; i < viewCount; i++)
@@ -355,8 +357,11 @@ namespace CompositeSceneGenerator
                         continue;
 
                     ObjectPlacer.PlaceView(view, objectRoot.transform,
-                        prefabLookup, scene, ref placed, ref skipped);
+                        prefabLookup, scene, ref placed, ref skipped, sceneTransforms, placedInstances);
                 }
+
+                // Rebuild parent/child hierarchy from the RecRoomObjects scene
+                ObjectPlacer.ReparentFromSceneHierarchy(placedInstances, sceneTransforms);
 
                 // 7. Save the scene
                 EditorUtility.DisplayProgressBar("Generating Composite Scene", "Saving scene...", 0.97f);

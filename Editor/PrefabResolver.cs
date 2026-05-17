@@ -105,60 +105,28 @@ namespace CompositeSceneGenerator
         }
 
         /// <summary>
-        /// Open a RecRoomObjects scene additively, scan its registry entries for
-        /// prefabId → prefab mappings, add them to the lookup, then close the scene.
+        /// Open a RecRoomObjects scene additively, walk every GameObject and:
+        ///   - collect prefabId → prefab mappings into <paramref name="lookup"/>,
+        ///   - collect uniqueId → world-space transform info into
+        ///     <paramref name="sceneTransforms"/>.
+        /// Then close the scene. Either output may be null to skip that pass.
         /// </summary>
-        public static void AddStudioObjectPrefabs(Dictionary<Guid, GameObject> lookup, string scenePath)
+        public static void AddStudioObjectPrefabs(
+            Dictionary<Guid, GameObject> lookup,
+            string scenePath,
+            Dictionary<Guid, SceneObjectInfo> sceneTransforms = null)
         {
             var scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive);
             int added = 0;
+            int transforms = 0;
 
             try
             {
                 foreach (var rootGo in scene.GetRootGameObjects())
                 {
-                    foreach (var comp in rootGo.GetComponents<Component>())
+                    foreach (var t in rootGo.GetComponentsInChildren<Transform>(true))
                     {
-                        if (comp == null)
-                            continue;
-
-                        var compSo = new SerializedObject(comp);
-                        var prefabIdProp = compSo.FindProperty("prefabId");
-                        var prefabRefProp = compSo.FindProperty("recRoomObjectPrefab");
-                        if (prefabIdProp == null || prefabRefProp == null)
-                            continue;
-
-                        // Read the prefab reference
-                        var prefabRef = prefabRefProp.objectReferenceValue;
-                        if (prefabRef == null)
-                            continue;
-
-                        GameObject prefabObj = null;
-                        if (prefabRef is Component prefabComp)
-                            prefabObj = prefabComp.gameObject;
-                        else if (prefabRef is GameObject go)
-                            prefabObj = go;
-                        if (prefabObj == null)
-                            continue;
-
-                        // Read the prefabId GUID
-                        var bytesProp = prefabIdProp.FindPropertyRelative("bytes");
-                        if (bytesProp == null || !bytesProp.isArray || bytesProp.arraySize != 16)
-                            continue;
-
-                        byte[] guidBytes = new byte[16];
-                        for (int b = 0; b < 16; b++)
-                            guidBytes[b] = (byte)bytesProp.GetArrayElementAtIndex(b).intValue;
-
-                        Guid guid = new Guid(guidBytes);
-                        if (guid == Guid.Empty)
-                            continue;
-
-                        if (!lookup.ContainsKey(guid))
-                        {
-                            lookup[guid] = prefabObj;
-                            added++;
-                        }
+                        ProcessGameObject(t.gameObject, lookup, sceneTransforms, ref added, ref transforms);
                     }
                 }
             }
@@ -167,7 +135,85 @@ namespace CompositeSceneGenerator
                 EditorSceneManager.CloseScene(scene, true);
             }
 
-            Debug.Log($"[PrefabResolver] Added {added} Studio Object prefabs from {scenePath}.");
+            Debug.Log($"[PrefabResolver] Scanned {scenePath}: added {added} Studio Object prefabs, captured {transforms} scene transforms.");
+        }
+
+        private static void ProcessGameObject(
+            GameObject go,
+            Dictionary<Guid, GameObject> lookup,
+            Dictionary<Guid, SceneObjectInfo> sceneTransforms,
+            ref int added,
+            ref int transforms)
+        {
+            foreach (var comp in go.GetComponents<Component>())
+            {
+                if (comp == null)
+                    continue;
+
+                var compSo = new SerializedObject(comp);
+                var prefabIdProp = compSo.FindProperty("prefabId");
+                var uniqueIdProp = compSo.FindProperty("uniqueId");
+                var parentUniqueIdProp = compSo.FindProperty("parentUniqueId");
+                if (prefabIdProp == null && uniqueIdProp == null)
+                    continue;
+
+                // Prefab mapping (only on components that also reference the prefab)
+                if (lookup != null && prefabIdProp != null)
+                {
+                    var prefabRefProp = compSo.FindProperty("recRoomObjectPrefab");
+                    if (prefabRefProp != null && prefabRefProp.objectReferenceValue != null)
+                    {
+                        GameObject prefabObj = null;
+                        var prefabRef = prefabRefProp.objectReferenceValue;
+                        if (prefabRef is Component prefabComp)
+                            prefabObj = prefabComp.gameObject;
+                        else if (prefabRef is GameObject g)
+                            prefabObj = g;
+
+                        if (prefabObj != null && TryReadGuid(prefabIdProp, out var prefabGuid)
+                            && !lookup.ContainsKey(prefabGuid))
+                        {
+                            lookup[prefabGuid] = prefabObj;
+                            added++;
+                        }
+                    }
+                }
+
+                // Transform mapping (keyed by uniqueId)
+                if (sceneTransforms != null && uniqueIdProp != null
+                    && TryReadGuid(uniqueIdProp, out var uniqueGuid)
+                    && !sceneTransforms.ContainsKey(uniqueGuid))
+                {
+                    var tr = go.transform;
+                    Guid parentGuid = Guid.Empty;
+                    if (parentUniqueIdProp != null)
+                        TryReadGuid(parentUniqueIdProp, out parentGuid);
+
+                    sceneTransforms[uniqueGuid] = new SceneObjectInfo
+                    {
+                        Position = tr.position,
+                        Rotation = tr.rotation,
+                        LossyScale = tr.lossyScale,
+                        ParentId = parentGuid,
+                    };
+                    transforms++;
+                }
+            }
+        }
+
+        private static bool TryReadGuid(SerializedProperty prop, out Guid guid)
+        {
+            guid = Guid.Empty;
+            var bytesProp = prop.FindPropertyRelative("bytes");
+            if (bytesProp == null || !bytesProp.isArray || bytesProp.arraySize != 16)
+                return false;
+
+            byte[] guidBytes = new byte[16];
+            for (int b = 0; b < 16; b++)
+                guidBytes[b] = (byte)bytesProp.GetArrayElementAtIndex(b).intValue;
+
+            guid = new Guid(guidBytes);
+            return guid != Guid.Empty;
         }
 
         private static Guid HexToGuid(string hex)

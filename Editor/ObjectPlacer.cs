@@ -13,7 +13,9 @@ namespace CompositeSceneGenerator
         internal static void PlaceView(
             PersistenceViewData view, Transform parent,
             Dictionary<Guid, GameObject> prefabLookup, Scene scene,
-            ref int placed, ref int skipped)
+            ref int placed, ref int skipped,
+            Dictionary<Guid, SceneObjectInfo> sceneTransforms = null,
+            Dictionary<Guid, GameObject> placedInstances = null)
         {
             if (view.SpawnableToolData != null && !view.SpawnableToolData.PrefabId.IsEmpty)
             {
@@ -26,19 +28,20 @@ namespace CompositeSceneGenerator
                     if (instance != null)
                     {
                         instance.transform.SetParent(parent, true);
-                        ApplyTransform(instance.transform, view.Transform, view.SandboxDeformationData);
+                        ApplyViewTransform(instance.transform, view, sceneTransforms);
                         if (HiddenPrefabIds.Ids.Contains(prefabGuid))
                             DisableRenderers(instance);
                         DisableCollidersIfDecoration(instance, view);
                         AddRigidbodyIfPhysical(instance, view);
                         PrefabPostProcessorRegistry.TryProcess(instance, prefabGuid, view);
+                        RecordPlacedInstance(placedInstances, view, instance);
                         placed++;
 
                         foreach (var child in view.ChildViews)
                         {
                             if (child.Data != null)
                                 PlaceView(child.Data, instance.transform,
-                                    prefabLookup, scene, ref placed, ref skipped);
+                                    prefabLookup, scene, ref placed, ref skipped, sceneTransforms, placedInstances);
                         }
                         return;
                     }
@@ -53,7 +56,7 @@ namespace CompositeSceneGenerator
             {
                 if (child.Data != null)
                     PlaceView(child.Data, parent,
-                        prefabLookup, scene, ref placed, ref skipped);
+                        prefabLookup, scene, ref placed, ref skipped, sceneTransforms, placedInstances);
             }
 
             if (view.SpawnableToolData != null && !view.SpawnableToolData.PrefabId.IsEmpty)
@@ -64,7 +67,9 @@ namespace CompositeSceneGenerator
             ConnectableNodeData node, Transform parent,
             Dictionary<string, PersistenceViewData> viewById,
             Dictionary<Guid, GameObject> prefabLookup, Scene scene,
-            HashSet<string> placedViewIds, ref int placed, ref int skipped)
+            HashSet<string> placedViewIds, ref int placed, ref int skipped,
+            Dictionary<Guid, SceneObjectInfo> sceneTransforms = null,
+            Dictionary<Guid, GameObject> placedInstances = null)
         {
             Transform nodeTransform = parent;
 
@@ -97,7 +102,11 @@ namespace CompositeSceneGenerator
 
                         if (node.IsRoot)
                         {
-                            ApplyTransform(instance.transform, view.Transform, view.SandboxDeformationData);
+                            ApplyViewTransform(instance.transform, view, sceneTransforms);
+                        }
+                        else if (view.Transform == null && TryGetSceneTransform(view, sceneTransforms, out var sceneInfo))
+                        {
+                            ApplySceneTransform(instance.transform, sceneInfo);
                         }
                         else
                         {
@@ -128,6 +137,7 @@ namespace CompositeSceneGenerator
                         }
 
                         nodeTransform = instance.transform;
+                        RecordPlacedInstance(placedInstances, view, instance);
                         placed++;
                     }
                     else
@@ -145,8 +155,105 @@ namespace CompositeSceneGenerator
             foreach (var child in node.Children)
             {
                 PlaceConnectableNode(child, nodeTransform,
-                    viewById, prefabLookup, scene, placedViewIds, ref placed, ref skipped);
+                    viewById, prefabLookup, scene, placedViewIds, ref placed, ref skipped, sceneTransforms, placedInstances);
             }
+        }
+
+        private static void RecordPlacedInstance(
+            Dictionary<Guid, GameObject> placedInstances,
+            PersistenceViewData view, GameObject instance)
+        {
+            if (placedInstances == null || view == null || view.Id == null || view.Id.IsEmpty)
+                return;
+            var guid = PrefabResolver.ByteStringToGuid(view.Id);
+            if (guid == Guid.Empty)
+                return;
+            placedInstances[guid] = instance;
+        }
+
+        /// <summary>
+        /// Reparent placed instances based on the parentUniqueId captured from the
+        /// RecRoomObjects scene. Preserves world position/rotation/scale.
+        /// </summary>
+        internal static void ReparentFromSceneHierarchy(
+            Dictionary<Guid, GameObject> placedInstances,
+            Dictionary<Guid, SceneObjectInfo> sceneTransforms)
+        {
+            if (placedInstances == null || sceneTransforms == null)
+                return;
+
+            int reparented = 0;
+            foreach (var kvp in placedInstances)
+            {
+                if (!sceneTransforms.TryGetValue(kvp.Key, out var info))
+                    continue;
+                if (info.ParentId == Guid.Empty)
+                    continue;
+                if (!placedInstances.TryGetValue(info.ParentId, out var parentInstance) || parentInstance == null)
+                    continue;
+                if (kvp.Value == null || kvp.Value.transform.parent == parentInstance.transform)
+                    continue;
+
+                kvp.Value.transform.SetParent(parentInstance.transform, true);
+                reparented++;
+            }
+
+            if (reparented > 0)
+                Debug.Log($"[ObjectPlacer] Reparented {reparented} instances from RecRoomObjects scene hierarchy.");
+        }
+
+        /// <summary>
+        /// Apply a transform to <paramref name="transform"/>, preferring the protobuf
+        /// TransformData when present and falling back to the RecRoomObjects scene
+        /// transform (Rooms 2 case, where transforms live in DOTSBI not in the binpb).
+        /// </summary>
+        internal static void ApplyViewTransform(
+            Transform transform, PersistenceViewData view,
+            Dictionary<Guid, SceneObjectInfo> sceneTransforms)
+        {
+            if (view.Transform != null)
+            {
+                ApplyTransform(transform, view.Transform, view.SandboxDeformationData);
+                return;
+            }
+
+            if (TryGetSceneTransform(view, sceneTransforms, out var info))
+                ApplySceneTransform(transform, info);
+        }
+
+        private static bool TryGetSceneTransform(
+            PersistenceViewData view,
+            Dictionary<Guid, SceneObjectInfo> sceneTransforms,
+            out SceneObjectInfo info)
+        {
+            info = default;
+            if (sceneTransforms == null || view == null || view.Id == null || view.Id.IsEmpty)
+                return false;
+            var guid = PrefabResolver.ByteStringToGuid(view.Id);
+            if (guid == Guid.Empty)
+                return false;
+            return sceneTransforms.TryGetValue(guid, out info);
+        }
+
+        private static void ApplySceneTransform(Transform transform, SceneObjectInfo info)
+        {
+            // Scene-derived transforms are in world space; place the instance
+            // there regardless of parent.
+            transform.position = info.Position;
+            transform.rotation = info.Rotation;
+
+            // Compensate for the parent's world scale so that the instance's
+            // effective world scale matches the captured lossy scale.
+            var parentLossy = transform.parent != null ? transform.parent.lossyScale : Vector3.one;
+            transform.localScale = new Vector3(
+                SafeDivide(info.LossyScale.x, parentLossy.x),
+                SafeDivide(info.LossyScale.y, parentLossy.y),
+                SafeDivide(info.LossyScale.z, parentLossy.z));
+        }
+
+        private static float SafeDivide(float a, float b)
+        {
+            return Mathf.Approximately(b, 0f) ? a : a / b;
         }
 
         internal static void ApplyTransform(Transform transform, TransformData data, SandboxDeformationData deformation = null)
