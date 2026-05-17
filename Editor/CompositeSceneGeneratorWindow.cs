@@ -269,8 +269,12 @@ namespace CompositeSceneGenerator
                     EditorSceneManager.SaveScene(scene, savePath);
                 }
 
-                // Reset skybox to Unity default
-                RenderSettings.skybox = null;
+                // Bake the base scene's skybox into a portable cubemap material
+                // before we replace it, so the composite scene keeps the look
+                // without depending on the source skybox shader/textures.
+                EditorUtility.DisplayProgressBar("Generating Composite Scene", "Baking skybox...", 0.06f);
+                Material bakedSkybox = SkyboxBaker.Bake(RenderSettings.skybox, savePath);
+                RenderSettings.skybox = bakedSkybox;
 
                 // 4. Convert GLB and place Maker Pen asset at origin
                 string sceneName = Path.GetFileNameWithoutExtension(savePath);
