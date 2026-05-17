@@ -360,6 +360,10 @@ namespace CompositeSceneGenerator
                         prefabLookup, scene, ref placed, ref skipped, sceneTransforms, placedInstances);
                 }
 
+                // Materialize empty container GameObjects for scene-captured
+                // objects that aren't placed views, so their transforms survive.
+                ObjectPlacer.MaterializeContainers(placedInstances, sceneTransforms, objectRoot.transform, scene);
+
                 // Rebuild parent/child hierarchy from the RecRoomObjects scene
                 ObjectPlacer.ReparentFromSceneHierarchy(placedInstances, sceneTransforms);
 

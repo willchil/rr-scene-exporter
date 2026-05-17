@@ -185,9 +185,24 @@ namespace CompositeSceneGenerator
                     && !sceneTransforms.ContainsKey(uniqueGuid))
                 {
                     var tr = go.transform;
-                    Guid parentGuid = Guid.Empty;
-                    if (parentUniqueIdProp != null)
-                        TryReadGuid(parentUniqueIdProp, out parentGuid);
+
+                    // Walk up the Unity transform hierarchy to find the nearest
+                    // ancestor that itself has a uniqueId. parentUniqueId on the
+                    // component sometimes skips raw container GameObjects (e.g.
+                    // Replicator content roots), so we resolve the chain directly
+                    // from the scene.
+                    Guid parentGuid = FindNearestAncestorUniqueId(tr);
+
+                    // Deformation (Rooms 2 equivalent of SandboxDeformationData).
+                    // Only applied when deformationTransformState == 2 (active).
+                    Vector3 deformation = Vector3.one;
+                    var stateProp = compSo.FindProperty("deformationTransformState");
+                    var deformScaleProp = compSo.FindProperty("deformationTransformLocalScale");
+                    if (stateProp != null && deformScaleProp != null
+                        && stateProp.intValue == 2)
+                    {
+                        deformation = deformScaleProp.vector3Value;
+                    }
 
                     sceneTransforms[uniqueGuid] = new SceneObjectInfo
                     {
@@ -195,6 +210,8 @@ namespace CompositeSceneGenerator
                         Rotation = tr.rotation,
                         LossyScale = tr.lossyScale,
                         ParentId = parentGuid,
+                        Deformation = deformation,
+                        Name = go.name,
                     };
                     transforms++;
                 }
@@ -214,6 +231,26 @@ namespace CompositeSceneGenerator
 
             guid = new Guid(guidBytes);
             return guid != Guid.Empty;
+        }
+
+        /// <summary>
+        /// Walk up <paramref name="t"/>'s parents and return the uniqueId of the
+        /// first ancestor that has one. Returns Guid.Empty if none found.
+        /// </summary>
+        private static Guid FindNearestAncestorUniqueId(Transform t)
+        {
+            for (var p = t.parent; p != null; p = p.parent)
+            {
+                foreach (var c in p.GetComponents<Component>())
+                {
+                    if (c == null) continue;
+                    var pSo = new SerializedObject(c);
+                    var uidProp = pSo.FindProperty("uniqueId");
+                    if (uidProp != null && TryReadGuid(uidProp, out var g))
+                        return g;
+                }
+            }
+            return Guid.Empty;
         }
 
         private static Guid HexToGuid(string hex)

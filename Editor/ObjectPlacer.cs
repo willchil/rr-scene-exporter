@@ -172,8 +172,45 @@ namespace CompositeSceneGenerator
         }
 
         /// <summary>
-        /// Reparent placed instances based on the parentUniqueId captured from the
-        /// RecRoomObjects scene. Preserves world position/rotation/scale.
+        /// For every scene-captured GameObject (with a uniqueId) that isn't a
+        /// placed view, instantiate an empty container GameObject so its
+        /// transform is preserved. Children placed later (via reparenting) will
+        /// land under these containers instead of skipping over them.
+        /// </summary>
+        internal static void MaterializeContainers(
+            Dictionary<Guid, GameObject> placedInstances,
+            Dictionary<Guid, SceneObjectInfo> sceneTransforms,
+            Transform defaultParent,
+            Scene scene)
+        {
+            if (placedInstances == null || sceneTransforms == null)
+                return;
+
+            int created = 0;
+            foreach (var kvp in sceneTransforms)
+            {
+                if (placedInstances.ContainsKey(kvp.Key))
+                    continue;
+
+                var info = kvp.Value;
+                var go = new GameObject(string.IsNullOrEmpty(info.Name) ? "Container" : info.Name);
+                SceneManager.MoveGameObjectToScene(go, scene);
+                if (defaultParent != null)
+                    go.transform.SetParent(defaultParent, false);
+                ApplySceneTransform(go.transform, info);
+                placedInstances[kvp.Key] = go;
+                created++;
+            }
+
+            if (created > 0)
+                Debug.Log($"[ObjectPlacer] Materialized {created} container GameObjects from RecRoomObjects scene.");
+        }
+
+        /// <summary>
+        /// Reparent placed instances based on the parent chain captured from the
+        /// RecRoomObjects scene. Walks up through non-placed intermediates (e.g.
+        /// a Replicator's "Container" child) until a placed instance is reached.
+        /// Preserves world position/rotation/scale.
         /// </summary>
         internal static void ReparentFromSceneHierarchy(
             Dictionary<Guid, GameObject> placedInstances,
@@ -185,13 +222,27 @@ namespace CompositeSceneGenerator
             int reparented = 0;
             foreach (var kvp in placedInstances)
             {
+                if (kvp.Value == null)
+                    continue;
                 if (!sceneTransforms.TryGetValue(kvp.Key, out var info))
                     continue;
-                if (info.ParentId == Guid.Empty)
-                    continue;
-                if (!placedInstances.TryGetValue(info.ParentId, out var parentInstance) || parentInstance == null)
-                    continue;
-                if (kvp.Value == null || kvp.Value.transform.parent == parentInstance.transform)
+
+                // Walk up the captured parent chain through non-placed
+                // intermediates until we find a placed instance.
+                Guid parentId = info.ParentId;
+                GameObject parentInstance = null;
+                var visited = new HashSet<Guid> { kvp.Key };
+                while (parentId != Guid.Empty && visited.Add(parentId))
+                {
+                    if (placedInstances.TryGetValue(parentId, out parentInstance) && parentInstance != null)
+                        break;
+                    parentInstance = null;
+                    if (!sceneTransforms.TryGetValue(parentId, out var parentInfo))
+                        break;
+                    parentId = parentInfo.ParentId;
+                }
+
+                if (parentInstance == null || kvp.Value.transform.parent == parentInstance.transform)
                     continue;
 
                 kvp.Value.transform.SetParent(parentInstance.transform, true);
@@ -243,12 +294,15 @@ namespace CompositeSceneGenerator
             transform.rotation = info.Rotation;
 
             // Compensate for the parent's world scale so that the instance's
-            // effective world scale matches the captured lossy scale.
+            // effective world scale matches the captured lossy scale, then fold
+            // in the deformation multiplier (Rooms 2 equivalent of
+            // SandboxDeformationData applied at root, matching Rooms 1 behavior).
             var parentLossy = transform.parent != null ? transform.parent.lossyScale : Vector3.one;
+            var d = info.Deformation == Vector3.zero ? Vector3.one : info.Deformation;
             transform.localScale = new Vector3(
-                SafeDivide(info.LossyScale.x, parentLossy.x),
-                SafeDivide(info.LossyScale.y, parentLossy.y),
-                SafeDivide(info.LossyScale.z, parentLossy.z));
+                SafeDivide(info.LossyScale.x, parentLossy.x) * d.x,
+                SafeDivide(info.LossyScale.y, parentLossy.y) * d.y,
+                SafeDivide(info.LossyScale.z, parentLossy.z) * d.z);
         }
 
         private static float SafeDivide(float a, float b)

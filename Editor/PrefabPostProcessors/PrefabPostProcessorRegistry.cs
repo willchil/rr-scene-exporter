@@ -22,6 +22,7 @@ namespace CompositeSceneGenerator
             s_initialized = true;
 
             Register(new LightPostProcessor());
+            Register(new ReplicatorPostProcessor());
         }
 
         private static void Register(IPrefabPostProcessor processor)
