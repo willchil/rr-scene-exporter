@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Exclude Unity meta sidecar from GitHub license detection
+LICENSE.meta linguist-generated=true

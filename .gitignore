@@ -13,5 +13,3 @@ Thumbs.db
 __pycache__/
 *.pyc
 *__pycache__.meta
-
-*LICENSE.meta
