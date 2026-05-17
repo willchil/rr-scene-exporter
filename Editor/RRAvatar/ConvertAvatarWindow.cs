@@ -369,8 +369,14 @@ namespace RRSceneExporter.RRAvatar
             }
             try
             {
-                if (temp.GetComponent<VRC.SDK3.Avatars.Components.VRCAvatarDescriptor>() == null)
-                    temp.AddComponent<VRC.SDK3.Avatars.Components.VRCAvatarDescriptor>();
+                // Resolve VRCAvatarDescriptor via reflection so this asmdef
+                // does not need a hard reference to VRC.SDK3A (the avatars
+                // SDK is optional — worlds-only projects still set
+                // HAS_VRCHAT_SDK via com.vrchat.base).
+                var descriptorType = Type.GetType(
+                    "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor, VRC.SDK3A");
+                if (descriptorType != null && temp.GetComponent(descriptorType) == null)
+                    temp.AddComponent(descriptorType);
 
                 PrefabUtility.SaveAsPrefabAssetAndConnect(
                     temp, prefabAssetPath, InteractionMode.AutomatedAction);
