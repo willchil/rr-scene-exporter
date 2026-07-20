@@ -1,6 +1,7 @@
 """Mesh-level fixups: name meshes after their material + merging for export."""
 
 import bpy
+from mathutils import Vector
 
 from .utils import base_name, select_only
 
@@ -9,6 +10,106 @@ from .utils import base_name, select_only
 # baked into the name. Strip those, plus the conventional ``mat_`` /
 # ``_mat`` decorations, to derive a clean mesh name.
 _UNITY_NAME_SUFFIXES = ("(Instance)", "(Clone)")
+
+_WATCH_FACE_U_MAX = 0.33
+_WATCH_FACE_V_MIN = 0.45
+_WATCH_CLOCK_UV_NAME = "ClockUV"
+
+
+def add_watch_clock_uvs(avatar_root):
+    """Add a non-mirrored UV channel to each watch face.
+
+    Rec Room's watch atlas stores the face in the upper-left rectangle. Its
+    UVs describe only half of the physical face because both mesh halves
+    overlap there. Locate that island through UV0, then project its distinct
+    vertex positions into the face plane so the complete face fills UV1.
+    Non-face corners remain outside the unit square.
+    """
+    for child in avatar_root.children:
+        if child.type != 'MESH' or "watch" not in child.name.lower():
+            continue
+
+        mesh = child.data
+        source_uv = mesh.uv_layers.active
+        if source_uv is None:
+            print(f"Warning: cannot add clock UVs to {child.name}: no source UV layer")
+            continue
+
+        face_polygons = []
+        for polygon in mesh.polygons:
+            coordinates = [source_uv.data[index].uv for index in polygon.loop_indices]
+            if all(
+                (coordinate.x % 1.0) <= _WATCH_FACE_U_MAX
+                and (coordinate.y % 1.0) >= _WATCH_FACE_V_MIN
+                for coordinate in coordinates
+            ):
+                face_polygons.append(polygon)
+
+        if not face_polygons:
+            print(f"Warning: cannot add clock UVs to {child.name}: watch face not found")
+            continue
+
+        samples = []
+        weighted_normal = Vector()
+        for polygon in face_polygons:
+            weighted_normal += polygon.normal * polygon.area
+            for loop_index in polygon.loop_indices:
+                loop = mesh.loops[loop_index]
+                position = mesh.vertices[loop.vertex_index].co
+                source_v = source_uv.data[loop_index].uv.y % 1.0
+                samples.append((loop_index, position.copy(), source_v))
+
+        face_normal = weighted_normal.normalized()
+        center = sum((position for _, position, _ in samples), Vector()) / len(samples)
+        mean_v = sum(source_v for _, _, source_v in samples) / len(samples)
+
+        # UV0's V axis is not mirrored, so its correlation with position gives
+        # a stable twelve-o'clock direction even when the watch is transformed.
+        up = sum(
+            ((position - center) * (source_v - mean_v)
+             for _, position, source_v in samples),
+            Vector(),
+        )
+        up -= face_normal * up.dot(face_normal)
+        if up.length_squared < 1e-12:
+            print(f"Warning: cannot add clock UVs to {child.name}: degenerate face axis")
+            continue
+        up.normalize()
+        right = up.cross(face_normal).normalized()
+
+        projections = [
+            ((position - center).dot(right), (position - center).dot(up))
+            for _, position, _ in samples
+        ]
+        min_u = min(coordinate[0] for coordinate in projections)
+        max_u = max(coordinate[0] for coordinate in projections)
+        min_v = min(coordinate[1] for coordinate in projections)
+        max_v = max(coordinate[1] for coordinate in projections)
+        width = max_u - min_u
+        height = max_v - min_v
+        if width < 1e-6 or height < 1e-6:
+            print(f"Warning: cannot add clock UVs to {child.name}: degenerate face bounds")
+            continue
+
+        source_index = mesh.uv_layers[:].index(source_uv)
+        clock_uv = mesh.uv_layers.get(_WATCH_CLOCK_UV_NAME)
+        if clock_uv is None:
+            clock_uv = mesh.uv_layers.new(name=_WATCH_CLOCK_UV_NAME)
+        for item in clock_uv.data:
+            item.uv = (-1.0, -1.0)
+        for (loop_index, _, _), (projected_u, projected_v) in zip(samples, projections):
+            clock_uv.data[loop_index].uv = (
+                (projected_u - min_u) / width,
+                (projected_v - min_v) / height,
+            )
+
+        # Keep the original atlas as UV0 and as the material/render UV layer.
+        mesh.uv_layers.active_index = source_index
+        source_uv.active_render = True
+        print(
+            f"Added {_WATCH_CLOCK_UV_NAME} to {child.name}: "
+            f"{len(face_polygons)} face polygons, {len(samples)} corners"
+        )
 
 
 def is_bean_avatar(avatar_root):

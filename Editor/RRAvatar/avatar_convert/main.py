@@ -15,7 +15,12 @@ from .utils import base_name
 from .bones import exclude_arm_helper_bones, fix_spine_hierarchy
 from .glb_io import export_fbx, import_glb, unpack_textures
 from .materials import fix_material_tints
-from .meshes import is_bean_avatar, merge_skinned_meshes, rename_meshes_by_material
+from .meshes import (
+    add_watch_clock_uvs,
+    is_bean_avatar,
+    merge_skinned_meshes,
+    rename_meshes_by_material,
+)
 from .rigging import rig_meshes
 from .tpose import force_tpose
 
@@ -99,6 +104,8 @@ def main():
                 bpy.data.objects.remove(child, do_unlink=True)
                 if mesh_data is not None and mesh_data.users == 0:
                     bpy.data.meshes.remove(mesh_data)
+
+    add_watch_clock_uvs(avatar_root)
 
     # Rename every surviving mesh to its first material's cleaned name (and
     # any watch mesh to the literal "Watch") so the rigid name match below

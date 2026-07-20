@@ -7,6 +7,9 @@
   "author": {
     "name": "willchil"
   },
+  "vpmDependencies": {
+    "com.llealloo.audiolink": ">=3.1.2"
+  },
   "keywords": [
     "recroom",
     "scene",

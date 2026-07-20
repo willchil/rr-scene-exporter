@@ -34,6 +34,7 @@ namespace RRSceneExporter.RRAvatar
         // off-hand watch by exact name on the Python side.
         private List<string> watchNodeNames = new List<string>();
         private const string WatchDisplayName = "Watch";
+        private const string WatchHandsShaderName = "Rec Room Scene Exporter/Watch Hands";
         private Vector2 rigidScroll;
 
         [MenuItem("Rec Room Exporter/Convert Avatar")]
@@ -1122,6 +1123,51 @@ namespace RRSceneExporter.RRAvatar
                 UnityEngine.Debug.Log($"[ConvertAvatar] Extracted {extracted} materials to {matAssetDir}");
 
             EnableAvatarFaceAlphaClip(matAssetDir);
+            ApplyWatchHandsShader(matAssetDir);
+        }
+
+        /// <summary>
+        /// Assign the packaged AudioLink clock shader to every extracted watch
+        /// material. Matching property names preserve the imported albedo,
+        /// normal, emission, metallic, smoothness, and occlusion settings.
+        /// </summary>
+        private static void ApplyWatchHandsShader(string matAssetDir)
+        {
+            Shader watchShader = Shader.Find(WatchHandsShaderName);
+            if (watchShader == null)
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[ConvertAvatar] Could not find shader '{WatchHandsShaderName}'. " +
+                    "Watch materials were left unchanged.");
+                return;
+            }
+
+            string matFullDir = Path.GetFullPath(matAssetDir);
+            if (!Directory.Exists(matFullDir))
+                return;
+
+            int patched = 0;
+            foreach (string file in Directory.GetFiles(matFullDir, "*.mat"))
+            {
+                if (!IsWatchMesh(Path.GetFileNameWithoutExtension(file)))
+                    continue;
+
+                string assetPath = matAssetDir + "/" + Path.GetFileName(file);
+                var mat = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
+                if (mat == null || mat.shader == watchShader)
+                    continue;
+
+                mat.shader = watchShader;
+                EditorUtility.SetDirty(mat);
+                patched++;
+            }
+
+            if (patched > 0)
+            {
+                AssetDatabase.SaveAssets();
+                UnityEngine.Debug.Log(
+                    $"[ConvertAvatar] Applied Watch Hands shader to {patched} watch material(s).");
+            }
         }
 
         /// <summary>
